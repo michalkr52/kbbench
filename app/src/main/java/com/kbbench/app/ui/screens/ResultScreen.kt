@@ -1,6 +1,7 @@
 package com.kbbench.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
@@ -23,7 +24,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
- import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kbbench.app.viewmodel.BenchmarkResult
@@ -36,16 +37,34 @@ fun ResultScreen(viewModel: CameraViewModel) {
     val results by viewModel.benchmarkResults.collectAsState()
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var currentPage by remember { mutableIntStateOf(0) }
+    var isSelectingForCompare by remember { mutableStateOf(false) }
+    var compareSelection by remember { mutableStateOf(setOf<Int>()) }
+    var compareIndices by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     BackHandler {
-        if (selectedIndex != null) {
-            selectedIndex = null
-        } else {
-            viewModel.backToCamera()
+        when {
+            compareIndices != null -> {
+                compareIndices = null
+            }
+            isSelectingForCompare -> {
+                isSelectingForCompare = false
+                compareSelection = emptySet()
+            }
+            selectedIndex != null -> {
+                selectedIndex = null
+            }
+            else -> {
+                viewModel.backToCamera()
+            }
         }
     }
 
-    val displayTitle = if (selectedIndex == null) "Benchmark Results" else results[currentPage].title
+    val displayTitle = when {
+        compareIndices != null -> "Compare"
+        isSelectingForCompare -> "Select 2 images"
+        selectedIndex != null -> results[currentPage].title
+        else -> "Benchmark Results"
+    }
 
     Scaffold(
         topBar = {
@@ -53,20 +72,31 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 title = { Text(displayTitle) },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (selectedIndex != null) {
-                            selectedIndex = null
-                        } else {
-                            viewModel.backToCamera()
+                        when {
+                            compareIndices != null -> {
+                                compareIndices = null
+                            }
+                            isSelectingForCompare -> {
+                                isSelectingForCompare = false
+                                compareSelection = emptySet()
+                            }
+                            selectedIndex != null -> {
+                                selectedIndex = null
+                            }
+                            else -> {
+                                viewModel.backToCamera()
+                            }
                         }
                     }) {
                         Icon(
-                            imageVector = if (selectedIndex == null) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close,
+                            imageVector = if (selectedIndex == null && !isSelectingForCompare && compareIndices == null)
+                                Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close,
                             contentDescription = "Back"
                         )
                     }
                 },
                 actions = {
-                    if (selectedIndex == null) {
+                    if (selectedIndex == null && !isSelectingForCompare && compareIndices == null) {
                         IconButton(onClick = { viewModel.exportResults(context) }) {
                             Icon(Icons.Default.Share, contentDescription = "Export")
                         }
@@ -75,22 +105,59 @@ fun ResultScreen(viewModel: CameraViewModel) {
             )
         }
     ) { padding ->
-        if (selectedIndex == null) {
-            ResultGridView(
-                results = results,
-                onItemClick = { index ->
-                    selectedIndex = index
-                    currentPage = index
-                },
-                modifier = Modifier.padding(padding)
-            )
-        } else {
-            ResultFullscreenView(
-                results = results,
-                initialIndex = selectedIndex!!,
-                onPageChanged = { page -> currentPage = page },
-                modifier = Modifier.padding(padding)
-            )
+        when {
+            compareIndices != null -> {
+                val (a, b) = compareIndices!!
+                CompareView(
+                    resultA = results[a],
+                    resultB = results[b],
+                    modifier = Modifier.padding(padding)
+                )
+            }
+            selectedIndex != null -> {
+                ResultFullscreenView(
+                    results = results,
+                    initialIndex = selectedIndex!!,
+                    onPageChanged = { page -> currentPage = page },
+                    modifier = Modifier.padding(padding)
+                )
+            }
+            else -> {
+                ResultGridView(
+                    results = results,
+                    isSelectingForCompare = isSelectingForCompare,
+                    compareSelection = compareSelection,
+                    onItemClick = { index ->
+                        if (isSelectingForCompare) {
+                            compareSelection = if (index in compareSelection) {
+                                compareSelection - index
+                            } else if (compareSelection.size < 2) {
+                                compareSelection + index
+                            } else {
+                                compareSelection
+                            }
+                        } else {
+                            selectedIndex = index
+                            currentPage = index
+                        }
+                    },
+                    onSelectForCompare = {
+                        isSelectingForCompare = true
+                        compareSelection = emptySet()
+                    },
+                    onCancelCompare = {
+                        isSelectingForCompare = false
+                        compareSelection = emptySet()
+                    },
+                    onCompare = {
+                        val sorted = compareSelection.sorted()
+                        compareIndices = Pair(sorted[0], sorted[1])
+                        isSelectingForCompare = false
+                        compareSelection = emptySet()
+                    },
+                    modifier = Modifier.padding(padding)
+                )
+            }
         }
     }
 }
@@ -98,40 +165,87 @@ fun ResultScreen(viewModel: CameraViewModel) {
 @Composable
 fun ResultGridView(
     results: List<BenchmarkResult>,
+    isSelectingForCompare: Boolean,
+    compareSelection: Set<Int>,
     onItemClick: (Int) -> Unit,
+    onSelectForCompare: () -> Unit,
+    onCancelCompare: () -> Unit,
+    onCompare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        contentPadding = PaddingValues(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = modifier
-    ) {
-        itemsIndexed(results) { index, result ->
-            Card(
-                modifier = Modifier
-                    .aspectRatio(1f)
-                    .clickable { onItemClick(index) }
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    AsyncImage(
-                        model = result.imagePath,
-                        contentDescription = result.title,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { rotationZ = result.rotationDegrees.toFloat() },
-                        contentScale = ContentScale.Crop
-                    )
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    ) {
-                        Text(
-                            text = result.title,
-                            modifier = Modifier.padding(4.dp),
-                            style = MaterialTheme.typography.labelSmall
+    Column(modifier = modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            contentPadding = PaddingValues(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            itemsIndexed(results) { index, result ->
+                val isSelected = index in compareSelection
+                Card(
+                    modifier = Modifier
+                        .aspectRatio(1f)
+                        .then(
+                            if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary,
+                                MaterialTheme.shapes.medium)
+                            else Modifier
                         )
+                        .clickable { onItemClick(index) }
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AsyncImage(
+                            model = result.imagePath,
+                            contentDescription = result.title,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer { rotationZ = result.rotationDegrees.toFloat() },
+                            contentScale = ContentScale.Crop
+                        )
+                        if (isSelectingForCompare) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { onItemClick(index) },
+                                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
+                            )
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        ) {
+                            Text(
+                                text = result.title,
+                                modifier = Modifier.padding(4.dp),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom action bar
+        Surface(
+            tonalElevation = 3.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+            ) {
+                if (isSelectingForCompare) {
+                    OutlinedButton(onClick = onCancelCompare) {
+                        Text("Cancel")
+                    }
+                    Button(
+                        onClick = onCompare,
+                        enabled = compareSelection.size == 2
+                    ) {
+                        Text("Compare")
+                    }
+                } else {
+                    OutlinedButton(onClick = onSelectForCompare) {
+                        Text("Select for comparison")
                     }
                 }
             }
@@ -264,6 +378,136 @@ fun ResultFullscreenView(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun CompareView(
+    resultA: BenchmarkResult,
+    resultB: BenchmarkResult,
+    modifier: Modifier = Modifier
+) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    Row(
+        modifier = modifier
+            .fillMaxSize()
+            .clipToBounds()
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        if (scale > 1f) {
+                            scale = 1f
+                            offset = Offset.Zero
+                        } else {
+                            scale = 3f
+                        }
+                    }
+                )
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val changes = event.changes
+
+                        if (changes.size >= 2) {
+                            val zoom = event.calculateZoom()
+                            val pan = event.calculatePan()
+                            val newScale = (scale * zoom).coerceIn(1f, 5f)
+                            scale = newScale
+
+                            if (newScale > 1f) {
+                                // Each image is half the row width
+                                val maxX = size.width * (newScale - 1f) / 4f
+                                val maxY = size.height * (newScale - 1f) / 2f
+                                offset = Offset(
+                                    (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                    (offset.y + pan.y).coerceIn(-maxY, maxY)
+                                )
+                            } else {
+                                offset = Offset.Zero
+                            }
+                            changes.forEach { if (it.positionChanged()) it.consume() }
+                        } else if (changes.size == 1 && scale > 1.01f) {
+                            val pan = event.calculatePan()
+                            val maxX = size.width * (scale - 1f) / 4f
+                            val maxY = size.height * (scale - 1f) / 2f
+                            offset = Offset(
+                                (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                (offset.y + pan.y).coerceIn(-maxY, maxY)
+                            )
+                            changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (changes.any { it.pressed })
+                }
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .clipToBounds()
+        ) {
+            AsyncImage(
+                model = resultA.imagePath,
+                contentDescription = resultA.title,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        rotationZ = resultA.rotationDegrees.toFloat()
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+                contentScale = ContentScale.Fit
+            )
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Text(
+                    text = resultA.title,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .clipToBounds()
+        ) {
+            AsyncImage(
+                model = resultB.imagePath,
+                contentDescription = resultB.title,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        rotationZ = resultB.rotationDegrees.toFloat()
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+                contentScale = ContentScale.Fit
+            )
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Text(
+                    text = resultB.title,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall
+                )
             }
         }
     }

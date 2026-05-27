@@ -423,7 +423,7 @@ class CameraViewModel : ViewModel() {
         }
 
         val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-            type = "text/*"
+            type = "*/*"
             putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
