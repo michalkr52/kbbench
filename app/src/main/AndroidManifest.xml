@@ -33,6 +33,7 @@
 
         <activity
             android:name="com.kbbench.app.CameraActivity"
+            android:screenOrientation="portrait"
             android:clearTaskOnLaunch="true"
             android:theme="@style/AppTheme"
             android:exported="true">

@@ -19,16 +19,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kbbench.app.viewmodel.BenchmarkResult
 import com.kbbench.app.viewmodel.CameraViewModel
-import kotlin.math.PI
-import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.sin
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,23 +126,20 @@ fun ResultFullscreenView(
     modifier: Modifier = Modifier
 ) {
     val pagerState = rememberPagerState(initialPage = initialIndex, pageCount = { results.size })
-    // Track scales for each page to disable pager scrolling when zoomed
-    val pageScales = remember { mutableStateMapOf<Int, Float>() }
-    val currentScale = pageScales[pagerState.currentPage] ?: 1f
+    var isPagerScrollEnabled by remember { mutableStateOf(true) }
 
     Column(modifier = modifier.fillMaxSize()) {
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.weight(1f),
-            userScrollEnabled = currentScale <= 1f
+            userScrollEnabled = isPagerScrollEnabled
         ) { page ->
             val result = results[page]
             var scale by remember { mutableFloatStateOf(1f) }
             var offset by remember { mutableStateOf(Offset.Zero) }
-            
-            // Sync local scale to the map so pager knows
+
             LaunchedEffect(scale) {
-                pageScales[page] = scale
+                isPagerScrollEnabled = scale <= 1.01f
             }
 
             Box(
@@ -153,74 +147,58 @@ fun ResultFullscreenView(
                     .fillMaxSize()
                     .clipToBounds()
                     .pointerInput(Unit) {
-                        awaitEachGesture {
-                            var zoom = 1f
-                            var pan = Offset.Zero
-                            var pastTouchSlop = false
-                            val touchSlop = viewConfiguration.touchSlop
-
-                            awaitFirstDown()
-                            do {
-                                val event = awaitPointerEvent()
-                                val canceled = event.changes.any { it.isConsumed }
-                                if (!canceled) {
-                                    val zoomChange = event.calculateZoom()
-                                    val panChange = event.calculatePan()
-
-                                    if (!pastTouchSlop) {
-                                        zoom *= zoomChange
-                                        pan += panChange
-                                        val centroidSize = event.calculateCentroidSize(useCurrent = false)
-                                        val zoomMotion = abs(1 - zoom) * centroidSize
-                                        val panMotion = pan.getDistance()
-
-                                        if (zoomMotion > touchSlop || panMotion > touchSlop) {
-                                            pastTouchSlop = true
-                                        }
-                                    }
-
-                                    if (pastTouchSlop) {
-                                        val oldScale = scale
-                                        // Only consume if we are zoomed in OR if it's a zoom gesture
-                                        val isZooming = abs(1 - zoomChange) > 0.01f
-                                        val shouldConsume = scale > 1.01f || isZooming
-
-                                        if (shouldConsume) {
-                                            scale = (scale * zoomChange).coerceIn(1f, 5f)
-                                            val extraWidth = (scale - 1) * size.width
-                                            val extraHeight = (scale - 1) * size.height
-                                            val maxX = extraWidth / 2
-                                            val maxY = extraHeight / 2
-
-                                            offset = if (scale == oldScale) {
-                                                Offset(
-                                                    x = (offset.x + panChange.x).coerceIn(-maxX, maxX),
-                                                    y = (offset.y + panChange.y).coerceIn(-maxY, maxY)
-                                                )
-                                            } else {
-                                                Offset(
-                                                    x = offset.x.coerceIn(-maxX, maxX),
-                                                    y = offset.y.coerceIn(-maxY, maxY)
-                                                )
-                                            }
-                                            event.changes.forEach { it.consume() }
-                                        }
-                                    }
-                                }
-                            } while (!canceled && event.changes.any { it.pressed })
-                        }
-                    }
-                    .pointerInput(Unit) {
                         detectTapGestures(
                             onDoubleTap = {
                                 if (scale > 1f) {
                                     scale = 1f
                                     offset = Offset.Zero
+                                    isPagerScrollEnabled = true
                                 } else {
                                     scale = 3f
+                                    isPagerScrollEnabled = false
                                 }
                             }
                         )
+                    }
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            do {
+                                val event = awaitPointerEvent()
+                                val changes = event.changes
+
+                                if (changes.size >= 2) {
+                                    // Pinch gesture: handle zoom + pan
+                                    val zoom = event.calculateZoom()
+                                    val pan = event.calculatePan()
+                                    val newScale = (scale * zoom).coerceIn(1f, 5f)
+                                    scale = newScale
+
+                                    if (newScale > 1f) {
+                                        val maxX = size.width * (newScale - 1f) / 2f
+                                        val maxY = size.height * (newScale - 1f) / 2f
+                                        offset = Offset(
+                                            (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                            (offset.y + pan.y).coerceIn(-maxY, maxY)
+                                        )
+                                    } else {
+                                        offset = Offset.Zero
+                                    }
+                                    changes.forEach { if (it.positionChanged()) it.consume() }
+                                } else if (changes.size == 1 && scale > 1.01f) {
+                                    // Single finger pan when zoomed in
+                                    val pan = event.calculatePan()
+                                    val maxX = size.width * (scale - 1f) / 2f
+                                    val maxY = size.height * (scale - 1f) / 2f
+                                    offset = Offset(
+                                        (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                        (offset.y + pan.y).coerceIn(-maxY, maxY)
+                                    )
+                                    changes.forEach { if (it.positionChanged()) it.consume() }
+                                }
+                                // When not zoomed + single finger: don't consume → pager handles swipe
+                            } while (changes.any { it.pressed })
+                        }
                     }
             ) {
                 AsyncImage(
@@ -238,11 +216,11 @@ fun ResultFullscreenView(
                 )
             }
         }
-        
+
         // Metrics overlay
         val currentResult = results[pagerState.currentPage]
         val displayMetrics = currentResult.metrics.toDisplayList()
-        
+
         if (displayMetrics.isNotEmpty()) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),

@@ -10,6 +10,8 @@ import com.kbbench.utils.AutoFitSurfaceView
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
+    previewWidth: Int = 0,
+    previewHeight: Int = 0,
     onSurfaceCreated: (Surface) -> Unit
 ) {
     AndroidView(
@@ -32,6 +34,11 @@ fun CameraPreview(
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
                     }
                 })
+            }
+        },
+        update = { view ->
+            if (previewWidth > 0 && previewHeight > 0) {
+                view.setAspectRatio(previewWidth, previewHeight)
             }
         }
     )

@@ -80,6 +80,9 @@ class CameraViewModel : ViewModel() {
     private val _zoomLevel = MutableStateFlow(1f)
     val zoomLevel = _zoomLevel.asStateFlow()
 
+    private val _previewSize = MutableStateFlow<android.util.Size?>(null)
+    val previewSize = _previewSize.asStateFlow()
+
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
@@ -98,6 +101,9 @@ class CameraViewModel : ViewModel() {
 
     fun setCaptureFormat(format: Int) {
         _captureFormat.value = format
+        if (format == ImageFormat.RAW_SENSOR) {
+            _zoomLevel.value = 1f
+        }
     }
 
     fun initialize(context: Context) {
@@ -106,7 +112,7 @@ class CameraViewModel : ViewModel() {
             val chars = manager.getCameraCharacteristics(id)
             chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
         } ?: manager.cameraIdList.firstOrNull()
-        
+
         cameraId?.let {
             characteristics = manager.getCameraCharacteristics(it)
         }
@@ -129,7 +135,7 @@ class CameraViewModel : ViewModel() {
 
     private fun computeRelativeRotation(chars: CameraCharacteristics): Int {
         val sensorOrientationDegrees = chars[CameraCharacteristics.SENSOR_ORIENTATION]!!
-        
+
         // Reverse device orientation for front-facing cameras
         val sign = if (chars[CameraCharacteristics.LENS_FACING] ==
                 CameraCharacteristics.LENS_FACING_FRONT) 1 else -1
@@ -154,13 +160,14 @@ class CameraViewModel : ViewModel() {
                 camera?.close()
 
                 camera = openCamera(manager, id, cameraHandler)
-                
+
                 val currentFormat = _captureFormat.value
                 val size = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
                     .getOutputSizes(currentFormat).maxByOrNull { it.height * it.width }!!
-                
+
+                _previewSize.value = size
                 imageReader = ImageReader.newInstance(size.width, size.height, currentFormat, 3)
-                
+
                 val targets = listOf(surface, imageReader!!.surface)
                 session = createCaptureSession(camera!!, targets, cameraHandler)
 
@@ -181,7 +188,9 @@ class CameraViewModel : ViewModel() {
         try {
             val captureRequest = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
-                applyZoom(this, _zoomLevel.value, chars)
+                if (_captureFormat.value != ImageFormat.RAW_SENSOR) {
+                    applyZoom(this, _zoomLevel.value, chars)
+                }
             }
             sess.setRepeatingRequest(captureRequest.build(), null, cameraHandler)
         } catch (e: Exception) {
@@ -192,7 +201,7 @@ class CameraViewModel : ViewModel() {
     fun setZoom(scale: Float) {
         val chars = characteristics ?: return
         val maxZoom = chars.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
-        
+
         val newZoom = (_zoomLevel.value * scale).coerceIn(1f, maxZoom)
         if (newZoom != _zoomLevel.value) {
             _zoomLevel.value = newZoom
@@ -202,7 +211,7 @@ class CameraViewModel : ViewModel() {
 
     private fun applyZoom(builder: CaptureRequest.Builder, zoomLevel: Float, chars: CameraCharacteristics) {
         val activeArraySize = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
-        
+
         val centerX = activeArraySize.centerX()
         val centerY = activeArraySize.centerY()
         val deltaX = (activeArraySize.width() / (2f * zoomLevel)).toInt()
@@ -228,34 +237,37 @@ class CameraViewModel : ViewModel() {
             try {
                 val request = sess.device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
-                    applyZoom(this, _zoomLevel.value, chars)
+                    if (_captureFormat.value != ImageFormat.RAW_SENSOR) {
+                        applyZoom(this, _zoomLevel.value, chars)
+                    }
                     set(CaptureRequest.JPEG_ORIENTATION, computeRelativeRotation(chars))
                 }
                 val result = capturePhoto(sess, reader, request)
                 val file = saveResult(context, result, chars)
-                
-                // Fix JPEG orientation
-                if (result.image.format == ImageFormat.JPEG) {
-                    try {
+
+                // Fix orientation for JPEG and RAW
+                try {
+                    val relativeRotation = computeRelativeRotation(chars)
+                    val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                    val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
+
+                    if (result.image.format == ImageFormat.JPEG) {
                         val exif = ExifInterface(file.absolutePath)
-                        val relativeRotation = computeRelativeRotation(chars)
-                        val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-                        val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
                         exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
                         exif.saveAttributes()
-                    } catch (e: Exception) {
-                        Log.e("CameraViewModel", "Error saving EXIF", e)
                     }
+                } catch (e: Exception) {
+                    Log.e("CameraViewModel", "Error saving metadata", e)
                 }
 
                 result.image.close()
-                
+
                 // Preprocessing placeholder
                 preprocess(file)
-                
+
                 // Trigger benchmarks placeholder
                 runBenchmarks(file)
-                
+
                 _currentScreen.value = AppScreen.RESULTS
                 closeCamera()
             } catch (e: Exception) {
@@ -273,16 +285,16 @@ class CameraViewModel : ViewModel() {
     private suspend fun runBenchmarks(file: File) {
         // Placeholder for multiple algorithms
         Log.d("CameraViewModel", "Running benchmarks for: ${file.absolutePath}")
-        
+
         val results = mutableListOf<BenchmarkResult>()
-        
+
         // 1. Add Original (Baseline)
         results.add(BenchmarkResult(
             id = "original",
             title = "Original",
             imagePath = file.absolutePath
         ))
-        
+
         // 2. Simulate Algorithm Outputs
         // In a real scenario, these would call your C++/Kotlin algorithms
         // and "tack on" the metrics calculated during execution.
@@ -290,7 +302,7 @@ class CameraViewModel : ViewModel() {
             val simulatedRuntime = (100..500).random().toLong()
             val simulatedPsnr = (2500..4000).random() / 100.0
             val simulatedSsim = (9000..9999).random() / 10000.0
-            
+
             results.add(BenchmarkResult(
                 id = "algo_$i",
                 title = "Algorithm $i",
@@ -302,7 +314,7 @@ class CameraViewModel : ViewModel() {
                 )
             ))
         }
-        
+
         _benchmarkResults.value = results
     }
 
@@ -355,10 +367,17 @@ class CameraViewModel : ViewModel() {
         val extension = if (result.image.format == ImageFormat.RAW_SENSOR) "dng" else "jpg"
         val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
         val file = File(context.filesDir, "IMG_${sdf.format(Date())}.$extension")
-        
+
         try {
             if (result.image.format == ImageFormat.RAW_SENSOR) {
                 val dngCreator = android.hardware.camera2.DngCreator(chars, result.metadata)
+
+                // Apply production orientation to DNG
+                val relativeRotation = computeRelativeRotation(chars)
+                val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
+                dngCreator.setOrientation(exifOrientation)
+
                 FileOutputStream(file).use { dngCreator.writeImage(it, result.image) }
             } else {
                 val buffer = result.image.planes[0].buffer

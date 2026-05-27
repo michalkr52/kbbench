@@ -66,18 +66,27 @@ fun CameraScreen(viewModel: CameraViewModel) {
         modifier = Modifier.fillMaxSize()
     ) { padding ->
         if (hasCameraPermission) {
+            val isRaw = captureFormat == ImageFormat.RAW_SENSOR
+            val previewSize by viewModel.previewSize.collectAsState()
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .pointerInput(Unit) {
-                        detectTransformGestures { _, _, zoom, _ ->
-                            viewModel.setZoom(zoom)
-                        }
-                    }
+                    .then(
+                        if (!isRaw) {
+                            Modifier.pointerInput(Unit) {
+                                detectTransformGestures { _, _, zoom, _ ->
+                                    viewModel.setZoom(zoom)
+                                }
+                            }
+                        } else Modifier
+                    )
             ) {
                 CameraPreview(
                     modifier = Modifier.fillMaxSize(),
+                    previewWidth = previewSize?.width ?: 0,
+                    previewHeight = previewSize?.height ?: 0,
                     onSurfaceCreated = { surface ->
                         lastSurface = surface
                         viewModel.initialize(context)
@@ -86,22 +95,24 @@ fun CameraScreen(viewModel: CameraViewModel) {
                 )
 
                 // Zoom Level Indicator
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 16.dp),
-                    contentAlignment = Alignment.TopCenter
-                ) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.5f),
-                        shape = CircleShape
+                if (!isRaw && zoomLevel > 1f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = 16.dp),
+                        contentAlignment = Alignment.TopCenter
                     ) {
-                        Text(
-                            text = "%.1fx".format(zoomLevel),
-                            color = Color.White,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelLarge
-                        )
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.5f),
+                            shape = CircleShape
+                        ) {
+                            Text(
+                                text = "%.1fx".format(zoomLevel),
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
                     }
                 }
 
