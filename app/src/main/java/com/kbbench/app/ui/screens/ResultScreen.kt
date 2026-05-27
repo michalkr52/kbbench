@@ -118,7 +118,9 @@ fun ResultGridView(
                     AsyncImage(
                         model = result.imagePath,
                         contentDescription = result.title,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { rotationZ = result.rotationDegrees.toFloat() },
                         contentScale = ContentScale.Crop
                     )
                     Surface(
@@ -230,6 +232,7 @@ fun ResultFullscreenView(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
+                            rotationZ = result.rotationDegrees.toFloat()
                             scaleX = scale
                             scaleY = scale
                             translationX = offset.x

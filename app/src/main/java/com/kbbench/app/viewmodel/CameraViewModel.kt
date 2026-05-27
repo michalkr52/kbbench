@@ -63,6 +63,7 @@ data class BenchmarkResult(
     val id: String,
     val title: String,
     val imagePath: String,
+    val rotationDegrees: Int = 0,
     val metrics: BenchmarkMetrics = BenchmarkMetrics()
 )
 
@@ -294,9 +295,10 @@ class CameraViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val isRaw = _captureFormat.value == ImageFormat.RAW_SENSOR
                 val request = sess.device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
-                    if (_captureFormat.value != ImageFormat.RAW_SENSOR) {
+                    if (!isRaw) {
                         applyZoom(this, _zoomLevel.value, chars)
                     }
                     set(CaptureRequest.JPEG_ORIENTATION, computeRelativeRotation(chars))
@@ -304,17 +306,19 @@ class CameraViewModel : ViewModel() {
                 val result = capturePhoto(sess, reader, request)
                 val file = saveResult(context, result, chars)
 
-                // Fix orientation for JPEG and RAW
-                try {
-                    val relativeRotation = computeRelativeRotation(chars)
-                    val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-                    val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
+                // Fix orientation for JPEG (DNG orientation is set via DngCreator.setOrientation)
+                if (!isRaw) {
+                    try {
+                        val relativeRotation = computeRelativeRotation(chars)
+                        val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                        val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
 
-                    val exif = ExifInterface(file.absolutePath)
-                    exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
-                    exif.saveAttributes()
-                } catch (e: Exception) {
-                    Log.e("CameraViewModel", "Error saving metadata", e)
+                        val exif = ExifInterface(file.absolutePath)
+                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                        exif.saveAttributes()
+                    } catch (e: Exception) {
+                        Log.e("CameraViewModel", "Error saving metadata", e)
+                    }
                 }
 
                 result.image.close()
@@ -322,8 +326,13 @@ class CameraViewModel : ViewModel() {
                 // Preprocessing placeholder
                 preprocess(file)
 
+                // Display rotation: RAW needs manual rotation, JPEG is handled by Coil/EXIF
+                val displayRotation = if (isRaw) {
+                    computeRelativeRotation(chars)
+                } else 0
+
                 // Trigger benchmarks placeholder
-                runBenchmarks(file)
+                runBenchmarks(file, displayRotation)
 
                 _currentScreen.value = AppScreen.RESULTS
                 closeCamera()
@@ -339,7 +348,7 @@ class CameraViewModel : ViewModel() {
         kotlinx.coroutines.delay(500) // Simulate work
     }
 
-    private suspend fun runBenchmarks(file: File) {
+    private suspend fun runBenchmarks(file: File, displayRotation: Int = 0) {
         // Placeholder for multiple algorithms
         Log.d("CameraViewModel", "Running benchmarks for: ${file.absolutePath}")
 
@@ -349,7 +358,8 @@ class CameraViewModel : ViewModel() {
         results.add(BenchmarkResult(
             id = "original",
             title = "Original",
-            imagePath = file.absolutePath
+            imagePath = file.absolutePath,
+            rotationDegrees = displayRotation
         ))
 
         // 2. Simulate Algorithm Outputs
@@ -364,6 +374,7 @@ class CameraViewModel : ViewModel() {
                 id = "algo_$i",
                 title = "Algorithm $i",
                 imagePath = file.absolutePath, // Placeholder: using same image
+                rotationDegrees = displayRotation,
                 metrics = BenchmarkMetrics(
                     runtimeMs = simulatedRuntime,
                     psnr = simulatedPsnr,
@@ -463,7 +474,6 @@ class CameraViewModel : ViewModel() {
             if (result.image.format == ImageFormat.RAW_SENSOR) {
                 val dngCreator = android.hardware.camera2.DngCreator(chars, result.metadata)
 
-                // Apply production orientation to DNG
                 val relativeRotation = computeRelativeRotation(chars)
                 val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
                 val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)

@@ -61,9 +61,6 @@ fun CameraScreen(viewModel: CameraViewModel) {
         }
     }
 
-    // Prevent back from exiting the app on camera screen
-    BackHandler { /* consume back on camera screen */ }
-
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
