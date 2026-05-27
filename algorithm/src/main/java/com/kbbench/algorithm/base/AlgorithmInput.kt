@@ -1,4 +1,4 @@
-package com.kbbench.algorithm
+package com.kbbench.algorithm.base
 
 /**
  * Immutable input passed to every [ImageAlgorithm].
@@ -20,4 +20,5 @@ data class AlgorithmInput(
     val isoValues: List<Int>,
     val captureTimeMs: Long,
 )
+
 

@@ -1,4 +1,4 @@
-package com.kbbench.algorithm
+package com.kbbench.algorithm.base
 
 /**
  * Common contract for every image processing algorithm benchmarked by kbbench.

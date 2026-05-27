@@ -1,4 +1,4 @@
-package com.kbbench.algorithm
+package com.kbbench.algorithm.base
 
 /**
  * High-level category describing what an algorithm primarily does.
@@ -63,4 +63,5 @@ data class AlgorithmMetadata(
     val frameRequirements: FrameRequirements,
     val description: String,
 )
+
 

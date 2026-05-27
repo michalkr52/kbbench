@@ -1,5 +1,10 @@
 package com.kbbench.algorithm
 
+import com.kbbench.algorithm.base.AlgorithmCategory
+import com.kbbench.algorithm.base.InputFrameType
+import com.kbbench.algorithm.impl.AlgorithmRegistry
+import com.kbbench.algorithm.impl.ContrastStretching
+import com.kbbench.algorithm.impl.ExposureFusion
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

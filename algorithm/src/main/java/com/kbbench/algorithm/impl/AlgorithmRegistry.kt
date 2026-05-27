@@ -1,4 +1,6 @@
-package com.kbbench.algorithm
+package com.kbbench.algorithm.impl
+
+import com.kbbench.algorithm.base.ImageAlgorithm
 
 /**
  * Registry of all [ImageAlgorithm] implementations available in this module.
@@ -22,4 +24,5 @@ class AlgorithmRegistry {
         algorithms.firstOrNull { it.name == name }
             ?: throw IllegalArgumentException("Unknown algorithm: $name")
 }
+
 
