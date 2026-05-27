@@ -1,4 +1,4 @@
-package com.example.android.camera.utils
+package com.kbbench.utils
 
 import android.graphics.ImageFormat
 import android.media.Image

@@ -17,40 +17,45 @@
 package com.kbbench.app
 
 import android.os.Bundle
-import android.view.View
-import androidx.appcompat.app.AppCompatActivity
-import com.kbbench.app.databinding.ActivityCameraBinding
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import com.kbbench.app.ui.theme.KbbenchTheme
+import com.kbbench.app.ui.screens.MainScreen
 
-class CameraActivity : AppCompatActivity() {
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
-    private lateinit var activityCameraBinding: ActivityCameraBinding
+class CameraActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        activityCameraBinding = ActivityCameraBinding.inflate(layoutInflater)
-        setContentView(activityCameraBinding.root)
-    }
+        
+        // Hide status bars and navigation bars for immersive experience
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
-    override fun onResume() {
-        super.onResume()
-        // Before setting full screen flags, we must wait a bit to let UI settle; otherwise, we may
-        // be trying to set app to immersive mode before it's ready and the flags do not stick
-        activityCameraBinding.fragmentContainer.postDelayed({
-            activityCameraBinding.fragmentContainer.systemUiVisibility = FLAGS_FULLSCREEN
-        }, IMMERSIVE_FLAG_TIMEOUT)
+        setContent {
+            KbbenchTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    MainScreen()
+                }
+            }
+        }
     }
 
     companion object {
-        /** Combination of all flags required to put activity into immersive mode */
-        const val FLAGS_FULLSCREEN =
-                View.SYSTEM_UI_FLAG_LOW_PROFILE or
-                        View.SYSTEM_UI_FLAG_FULLSCREEN or
-                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-
         /** Milliseconds used for UI animations */
         const val ANIMATION_FAST_MILLIS = 50L
         const val ANIMATION_SLOW_MILLIS = 100L
-        private const val IMMERSIVE_FLAG_TIMEOUT = 500L
     }
 }
