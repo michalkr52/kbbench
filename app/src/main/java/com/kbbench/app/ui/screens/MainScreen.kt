@@ -48,6 +48,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val context = LocalContext.current
     val captureFormat by viewModel.captureFormat.collectAsState()
     val zoomLevel by viewModel.zoomLevel.collectAsState()
+    val isProcessing by viewModel.isProcessing.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
@@ -202,7 +203,8 @@ fun CameraScreen(viewModel: CameraViewModel) {
                     Button(
                         onClick = { viewModel.takePhoto(context) },
                         modifier = Modifier.size(80.dp),
-                        shape = CircleShape
+                        shape = CircleShape,
+                        enabled = !isProcessing
                     ) {
                         // Empty content for now
                     }

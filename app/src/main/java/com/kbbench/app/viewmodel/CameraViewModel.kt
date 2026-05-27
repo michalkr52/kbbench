@@ -3,7 +3,10 @@ package com.kbbench.app.viewmodel
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.hardware.camera2.*
 import android.hardware.camera2.params.MeteringRectangle
 import androidx.core.content.FileProvider
@@ -17,6 +20,10 @@ import android.view.OrientationEventListener.ORIENTATION_UNKNOWN
 import android.view.Surface
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.kbbench.algorithm.*
+import com.kbbench.algorithm.preprocessing.BayerDemosaic
+import com.kbbench.algorithm.preprocessing.CfaPattern
+import com.kbbench.algorithm.preprocessing.WhiteBalance
 import com.kbbench.utils.getPreviewOutputSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,11 +76,17 @@ data class BenchmarkResult(
 
 class CameraViewModel : ViewModel() {
 
+    // TODO: Add algorithm selection UI; for now all registered algorithms are used
+    private val algorithmRegistry = AlgorithmRegistry()
+
     private val _currentScreen = MutableStateFlow(AppScreen.CAMERA)
     val currentScreen = _currentScreen.asStateFlow()
 
     private val _isCameraReady = MutableStateFlow(false)
     val isCameraReady = _isCameraReady.asStateFlow()
+
+    private val _isProcessing = MutableStateFlow(false)
+    val isProcessing = _isProcessing.asStateFlow()
 
     private val _captureFormat = MutableStateFlow(ImageFormat.JPEG)
     val captureFormat = _captureFormat.asStateFlow()
@@ -170,7 +183,10 @@ class CameraViewModel : ViewModel() {
                     .getOutputSizes(currentFormat).maxByOrNull { it.height * it.width }!!
 
                 _previewSize.value = size
-                imageReader = ImageReader.newInstance(size.width, size.height, currentFormat, 3)
+                val maxFrames = algorithmRegistry.getAll()
+                    .maxOfOrNull { it.metadata.frameRequirements.minFrames } ?: 1
+                val readerBufferSize = maxFrames.coerceAtLeast(3)
+                imageReader = ImageReader.newInstance(size.width, size.height, currentFormat, readerBufferSize)
 
                 val targets = listOf(surface, imageReader!!.surface)
                 session = createCaptureSession(camera!!, targets, cameraHandler)
@@ -294,8 +310,12 @@ class CameraViewModel : ViewModel() {
         val chars = characteristics ?: manager.getCameraCharacteristics(id)
 
         viewModelScope.launch(Dispatchers.IO) {
+            _isProcessing.value = true
             try {
                 val isRaw = _captureFormat.value == ImageFormat.RAW_SENSOR
+                val algorithms = algorithmRegistry.getAll()
+                val maxFramesNeeded = algorithms.maxOfOrNull { it.metadata.frameRequirements.minFrames } ?: 1
+
                 val request = sess.device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
                     if (!isRaw) {
@@ -303,10 +323,26 @@ class CameraViewModel : ViewModel() {
                     }
                     set(CaptureRequest.JPEG_ORIENTATION, computeRelativeRotation(chars))
                 }
-                val result = capturePhoto(sess, reader, request)
-                val file = saveResult(context, result, chars)
 
-                // Fix orientation for JPEG (DNG orientation is set via DngCreator.setOrientation)
+                // Determine if exposure bracketing is needed
+                val needsBracketing = algorithms.any {
+                    it.metadata.frameRequirements.inputFrameType == InputFrameType.EXPOSURE_BRACKET
+                }
+
+                // Capture frames (with bracketing if needed)
+                val captureStartMs = System.currentTimeMillis()
+                val capturedFrames = if (needsBracketing && maxFramesNeeded > 1) {
+                    captureBracketedFrames(sess, reader, request, chars, maxFramesNeeded)
+                } else {
+                    captureFrames(sess, reader, request, maxFramesNeeded)
+                }
+                val captureTimeMs = System.currentTimeMillis() - captureStartMs
+
+                // Save first frame as the original reference
+                val firstResult = capturedFrames.first()
+                val file = saveResult(context, firstResult, chars)
+
+                // Fix orientation for JPEG
                 if (!isRaw) {
                     try {
                         val relativeRotation = computeRelativeRotation(chars)
@@ -321,66 +357,275 @@ class CameraViewModel : ViewModel() {
                     }
                 }
 
-                result.image.close()
+                // Get RAW white/black levels from characteristics for proper normalization
+                val whiteLevel = chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023
+                val blackLevel = chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let {
+                    // Average of 4 Bayer channels
+                    ((it.getOffsetForIndex(0, 0) + it.getOffsetForIndex(0, 1) +
+                      it.getOffsetForIndex(1, 0) + it.getOffsetForIndex(1, 1)) / 4)
+                } ?: 64
+                val cfaPattern = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+                    ?: CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
 
-                // Preprocessing placeholder
-                preprocess(file)
+                // Convert captured frames to ARGB pixel arrays for algorithms
+                val framePixels = capturedFrames.map { frame -> decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern) }
+                val width = framePixels.first().second
+                val height = framePixels.first().third
+                val pixelArrays = framePixels.map { it.first }
 
-                // Display rotation: RAW needs manual rotation, JPEG is handled by Coil/EXIF
-                val displayRotation = if (isRaw) {
-                    computeRelativeRotation(chars)
-                } else 0
+                // Extract exposure metadata from capture results
+                val exposureTimes = capturedFrames.map { frame ->
+                    frame.metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+                }
+                val isoValues = capturedFrames.map { frame ->
+                    frame.metadata.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
+                }
 
-                // Trigger benchmarks placeholder
-                runBenchmarks(file, displayRotation)
+                // Close all captured images
+                capturedFrames.forEach { it.image.close() }
+
+                // Rotation: original JPEG has EXIF (Coil handles it), but algorithm
+                // output PNGs and RAW have no EXIF so they need explicit rotation
+                val rotation = computeRelativeRotation(chars)
+                val originalRotation = if (isRaw) rotation else 0
+                val outputRotation = rotation
+
+                // Run algorithms and build results
+                runBenchmarks(context, file, algorithms, pixelArrays, width, height,
+                    exposureTimes, isoValues, captureTimeMs, originalRotation, outputRotation)
 
                 _currentScreen.value = AppScreen.RESULTS
                 closeCamera()
             } catch (e: Exception) {
                 Log.e("CameraViewModel", "Error taking photo", e)
+            } finally {
+                _isProcessing.value = false
             }
         }
     }
 
-    private suspend fun preprocess(file: File) {
-        // Placeholder for basic preprocessing
-        Log.d("CameraViewModel", "Preprocessing image: ${file.absolutePath}")
-        kotlinx.coroutines.delay(500) // Simulate work
+    private fun decodeToArgb(
+        frame: CombinedResult,
+        whiteLevel: Int = 1023,
+        blackLevel: Int = 64,
+        cfaPattern: Int = CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
+    ): Triple<IntArray, Int, Int> {
+        val image = frame.image
+        return if (image.format == ImageFormat.JPEG) {
+            val buffer = image.planes[0].buffer
+            buffer.rewind()
+            val bytes = ByteArray(buffer.remaining()).apply { buffer.get(this) }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            val w = bitmap.width
+            val h = bitmap.height
+            bitmap.recycle()
+            Triple(pixels, w, h)
+        } else {
+            // RAW_SENSOR: normalize + Bayer demosaic via preprocessing module
+            val plane = image.planes[0]
+            val w = image.width
+            val h = image.height
+            val raw = BayerDemosaic.normalizeRaw16(
+                rawBuffer = plane.buffer,
+                width = w,
+                height = h,
+                rowStride = plane.rowStride,
+                pixelStride = plane.pixelStride,
+                whiteLevel = whiteLevel,
+                blackLevel = blackLevel
+            )
+            val pixels = BayerDemosaic.demosaic(raw, w, h, CfaPattern.fromId(cfaPattern))
+
+            // Apply white balance from capture AWB gains
+            val gains = frame.metadata.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            if (gains != null) {
+                WhiteBalance.apply(pixels, gains.red, gains.greenEven, gains.blue)
+            }
+
+            Triple(pixels, w, h)
+        }
     }
 
-    private suspend fun runBenchmarks(file: File, displayRotation: Int = 0) {
-        // Placeholder for multiple algorithms
-        Log.d("CameraViewModel", "Running benchmarks for: ${file.absolutePath}")
+    private suspend fun captureFrames(
+        session: CameraCaptureSession,
+        reader: ImageReader,
+        request: CaptureRequest.Builder,
+        frameCount: Int
+    ): List<CombinedResult> {
+        // Flush any stale images
+        while (true) {
+            val old = reader.acquireNextImage() ?: break
+            old.close()
+        }
+
+        val results = mutableListOf<CombinedResult>()
+        for (i in 0 until frameCount) {
+            results.add(captureSingleFrame(session, reader, request))
+        }
+        return results
+    }
+
+    private suspend fun captureBracketedFrames(
+        session: CameraCaptureSession,
+        reader: ImageReader,
+        baseRequest: CaptureRequest.Builder,
+        chars: CameraCharacteristics,
+        frameCount: Int
+    ): List<CombinedResult> {
+        // Flush any stale images
+        while (true) {
+            val old = reader.acquireNextImage() ?: break
+            old.close()
+        }
+
+        // First capture with auto-exposure to get the base exposure time
+        val firstFrame = captureSingleFrame(session, reader, baseRequest)
+        val baseExposure = firstFrame.metadata.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 33_000_000L
+        val baseIso = firstFrame.metadata.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
+
+        val results = mutableListOf(firstFrame)
+
+        // Exposure multipliers for bracketing (spread around the base exposure)
+        // For 3 frames: [1x (already captured), 0.25x, 4x]
+        val exposureRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        val multipliers = when {
+            frameCount >= 3 -> listOf(0.25, 4.0)
+            frameCount == 2 -> listOf(4.0)
+            else -> emptyList()
+        }
+
+        for (mult in multipliers) {
+            val targetExposure = (baseExposure * mult).toLong().let { target ->
+                if (exposureRange != null) {
+                    target.coerceIn(exposureRange.lower, exposureRange.upper)
+                } else target
+            }
+
+            baseRequest.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            baseRequest.set(CaptureRequest.SENSOR_EXPOSURE_TIME, targetExposure)
+            baseRequest.set(CaptureRequest.SENSOR_SENSITIVITY, baseIso)
+
+            results.add(captureSingleFrame(session, reader, baseRequest))
+        }
+
+        return results
+    }
+
+    private suspend fun captureSingleFrame(
+        session: CameraCaptureSession,
+        reader: ImageReader,
+        request: CaptureRequest.Builder
+    ): CombinedResult = suspendCoroutine { cont ->
+        val imageQueue = ArrayBlockingQueue<android.media.Image>(2)
+
+        reader.setOnImageAvailableListener({ r ->
+            val image = r.acquireNextImage()
+            if (image != null) imageQueue.add(image)
+        }, imageReaderHandler)
+
+        session.capture(request.build(), object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureCompleted(s: CameraCaptureSession, req: CaptureRequest, result: TotalCaptureResult) {
+                val image = imageQueue.take()
+                cont.resume(CombinedResult(image, result))
+            }
+            override fun onCaptureFailed(s: CameraCaptureSession, req: CaptureRequest, failure: CaptureFailure) {
+                cont.resumeWithException(RuntimeException("Capture failed: ${failure.reason}"))
+            }
+        }, cameraHandler)
+    }
+
+    private fun runBenchmarks(
+        context: Context,
+        originalFile: File,
+        algorithms: List<ImageAlgorithm>,
+        frames: List<IntArray>,
+        width: Int,
+        height: Int,
+        exposureTimes: List<Long>,
+        isoValues: List<Int>,
+        captureTimeMs: Long,
+        originalRotation: Int,
+        outputRotation: Int
+    ) {
+        Log.d("CameraViewModel", "Running ${algorithms.size} algorithms on ${frames.size} frame(s)")
 
         val results = mutableListOf<BenchmarkResult>()
 
-        // 1. Add Original (Baseline)
+        // Original image as baseline
         results.add(BenchmarkResult(
             id = "original",
             title = "Original",
-            imagePath = file.absolutePath,
-            rotationDegrees = displayRotation
+            imagePath = originalFile.absolutePath,
+            rotationDegrees = originalRotation
         ))
 
-        // 2. Simulate Algorithm Outputs
-        // In a real scenario, these would call your C++/Kotlin algorithms
-        // and "tack on" the metrics calculated during execution.
-        for (i in 1..3) {
-            val simulatedRuntime = (100..500).random().toLong()
-            val simulatedPsnr = (2500..4000).random() / 100.0
-            val simulatedSsim = (9000..9999).random() / 10000.0
+        for (algo in algorithms) {
+            val minFrames = algo.metadata.frameRequirements.minFrames
+            if (frames.size < minFrames) {
+                Log.w("CameraViewModel", "Skipping ${algo.name}: needs $minFrames frames, have ${frames.size}")
+                continue
+            }
 
-            results.add(BenchmarkResult(
-                id = "algo_$i",
-                title = "Algorithm $i",
-                imagePath = file.absolutePath, // Placeholder: using same image
-                rotationDegrees = displayRotation,
-                metrics = BenchmarkMetrics(
-                    runtimeMs = simulatedRuntime,
-                    psnr = simulatedPsnr,
-                    ssim = simulatedSsim
-                )
-            ))
+            // Single-frame algorithms get first frame; multi-frame get all available
+            val inputFrames = if (minFrames == 1 && algo.metadata.frameRequirements.maxFrames == 1) {
+                listOf(frames.first())
+            } else {
+                val max = algo.metadata.frameRequirements.maxFrames ?: frames.size
+                frames.take(max)
+            }
+
+            val input = AlgorithmInput(
+                frames = inputFrames,
+                width = width,
+                height = height,
+                exposureTimes = exposureTimes.take(inputFrames.size),
+                isoValues = isoValues.take(inputFrames.size),
+                captureTimeMs = captureTimeMs,
+            )
+
+            try {
+                val output = algo.process(input)
+
+                // Save output pixels as PNG (physically rotated for correct display)
+                val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+                val outFile = File(context.filesDir, "OUT_${algo.name}_${sdf.format(Date())}.png")
+                var bitmap = Bitmap.createBitmap(output.width, output.height, Bitmap.Config.ARGB_8888)
+                bitmap.setPixels(output.pixels, 0, output.width, 0, 0, output.width, output.height)
+                if (outputRotation != 0) {
+                    val matrix = Matrix().apply { postRotate(outputRotation.toFloat()) }
+                    val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                    bitmap.recycle()
+                    bitmap = rotated
+                }
+                FileOutputStream(outFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
+
+                results.add(BenchmarkResult(
+                    id = algo.name.lowercase(Locale.US),
+                    title = algo.name,
+                    imagePath = outFile.absolutePath,
+                    rotationDegrees = 0,
+                    metrics = BenchmarkMetrics(
+                        runtimeMs = output.timings.totalMs,
+                        extra = buildMap {
+                            if (output.timings.alignMs > 0) put("Align", "${output.timings.alignMs}ms")
+                            if (output.timings.processMs > 0) put("Process", "${output.timings.processMs}ms")
+                            if (output.timings.tonemapMs > 0) put("Tonemap", "${output.timings.tonemapMs}ms")
+                        }
+                    )
+                ))
+            } catch (e: Exception) {
+                Log.e("CameraViewModel", "Algorithm ${algo.name} failed", e)
+                results.add(BenchmarkResult(
+                    id = algo.name.lowercase(Locale.US),
+                    title = "${algo.name} (failed)",
+                    imagePath = originalFile.absolutePath,
+                    rotationDegrees = originalRotation,
+                    metrics = BenchmarkMetrics(extra = mapOf("Error" to (e.message ?: "Unknown")))
+                ))
+            }
         }
 
         _benchmarkResults.value = results
@@ -438,31 +683,6 @@ class CameraViewModel : ViewModel() {
         camera?.close()
         camera = null
         _isCameraReady.value = false
-    }
-
-    private suspend fun capturePhoto(session: CameraCaptureSession, reader: ImageReader, request: CaptureRequest.Builder): CombinedResult = suspendCoroutine { cont ->
-        // Flush any images left in the image reader
-        while (true) {
-            val oldImage = reader.acquireNextImage() ?: break
-            oldImage.close()
-        }
-
-        val imageQueue = ArrayBlockingQueue<android.media.Image>(3)
-        reader.setOnImageAvailableListener({ r ->
-            val image = r.acquireNextImage()
-            imageQueue.add(image)
-        }, imageReaderHandler)
-
-        session.capture(request.build(), object : CameraCaptureSession.CaptureCallback() {
-            override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
-                val image = imageQueue.take()
-                cont.resume(CombinedResult(image, result))
-            }
-
-            override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) {
-                cont.resumeWithException(RuntimeException("Capture failed: ${failure.reason}"))
-            }
-        }, cameraHandler)
     }
 
     private fun saveResult(context: Context, result: CombinedResult, chars: CameraCharacteristics): File {
