@@ -2,8 +2,11 @@ package com.kbbench.app.viewmodel
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
+import android.hardware.camera2.params.MeteringRectangle
+import androidx.core.content.FileProvider
 import androidx.exifinterface.media.ExifInterface
 import android.media.ImageReader
 import android.os.Handler
@@ -209,6 +212,62 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    fun focusAt(x: Float, y: Float, viewWidth: Int, viewHeight: Int) {
+        val chars = characteristics ?: return
+        val sess = session ?: return
+        val cam = camera ?: return
+        val surface = previewSurface ?: return
+        val activeArraySize = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+
+        // Map tap coordinates to the current crop region (accounts for zoom)
+        val effectiveZoom = if (_captureFormat.value == ImageFormat.RAW_SENSOR) 1f else _zoomLevel.value
+        val cropWidth = activeArraySize.width() / effectiveZoom
+        val cropHeight = activeArraySize.height() / effectiveZoom
+        val cropLeft = activeArraySize.centerX() - cropWidth / 2f
+        val cropTop = activeArraySize.centerY() - cropHeight / 2f
+
+        val sensorX = (cropLeft + x / viewWidth * cropWidth).toInt()
+        val sensorY = (cropTop + y / viewHeight * cropHeight).toInt()
+        val meteringSize = (cropWidth * 0.05f).toInt()
+
+        val meteringRect = android.graphics.Rect(
+            (sensorX - meteringSize).coerceAtLeast(0),
+            (sensorY - meteringSize).coerceAtLeast(0),
+            (sensorX + meteringSize).coerceAtMost(activeArraySize.width()),
+            (sensorY + meteringSize).coerceAtMost(activeArraySize.height())
+        )
+        val meteringRectangle = MeteringRectangle(meteringRect, MeteringRectangle.METERING_WEIGHT_MAX)
+
+        try {
+            // Set repeating request with AF_MODE_AUTO and regions so focus is maintained
+            val repeatingRequest = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(surface)
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRectangle))
+                set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
+                if (_captureFormat.value != ImageFormat.RAW_SENSOR) {
+                    applyZoom(this, _zoomLevel.value, chars)
+                }
+            }
+            sess.setRepeatingRequest(repeatingRequest.build(), null, cameraHandler)
+
+            // Send one-shot AF trigger on top of the repeating request
+            val triggerRequest = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(surface)
+                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(meteringRectangle))
+                set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(meteringRectangle))
+                set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                if (_captureFormat.value != ImageFormat.RAW_SENSOR) {
+                    applyZoom(this, _zoomLevel.value, chars)
+                }
+            }
+            sess.capture(triggerRequest.build(), null, cameraHandler)
+        } catch (e: Exception) {
+            Log.e("CameraViewModel", "Error focusing", e)
+        }
+    }
+
     private fun applyZoom(builder: CaptureRequest.Builder, zoomLevel: Float, chars: CameraCharacteristics) {
         val activeArraySize = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
 
@@ -251,11 +310,9 @@ class CameraViewModel : ViewModel() {
                     val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
                     val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
 
-                    if (result.image.format == ImageFormat.JPEG) {
-                        val exif = ExifInterface(file.absolutePath)
-                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
-                        exif.saveAttributes()
-                    }
+                    val exif = ExifInterface(file.absolutePath)
+                    exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                    exif.saveAttributes()
                 } catch (e: Exception) {
                     Log.e("CameraViewModel", "Error saving metadata", e)
                 }
@@ -323,9 +380,43 @@ class CameraViewModel : ViewModel() {
         _benchmarkResults.value = emptyList()
     }
 
-    fun exportResults() {
-        // Placeholder for exporting results
-        Log.d("CameraViewModel", "Exporting results...")
+    fun exportResults(context: Context) {
+        val results = _benchmarkResults.value
+        if (results.isEmpty()) return
+
+        // Build CSV report
+        val sb = StringBuilder()
+        sb.appendLine("ID,Title,Runtime (ms),PSNR (dB),SSIM,Image Path")
+        results.forEach { r ->
+            val m = r.metrics
+            sb.appendLine("${r.id},${r.title},${m.runtimeMs ?: ""},${m.psnr ?: ""},${m.ssim ?: ""},${r.imagePath}")
+        }
+
+        val reportFile = File(context.cacheDir, "benchmark_report.csv")
+        reportFile.writeText(sb.toString())
+
+        val authority = "${context.packageName}.fileprovider"
+        val uris = ArrayList<android.net.Uri>()
+
+        uris.add(FileProvider.getUriForFile(context, authority, reportFile))
+
+        // Attach unique image files
+        val seenPaths = mutableSetOf<String>()
+        results.forEach { r ->
+            if (seenPaths.add(r.imagePath)) {
+                val imageFile = File(r.imagePath)
+                if (imageFile.exists()) {
+                    uris.add(FileProvider.getUriForFile(context, authority, imageFile))
+                }
+            }
+        }
+
+        val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "text/*"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(shareIntent, "Export Benchmark Results"))
     }
 
     fun closeCamera() {

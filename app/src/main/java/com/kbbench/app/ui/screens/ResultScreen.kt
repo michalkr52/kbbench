@@ -1,5 +1,6 @@
 package com.kbbench.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
@@ -22,6 +23,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
+ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kbbench.app.viewmodel.BenchmarkResult
@@ -30,13 +32,25 @@ import com.kbbench.app.viewmodel.CameraViewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ResultScreen(viewModel: CameraViewModel) {
+    val context = LocalContext.current
     val results by viewModel.benchmarkResults.collectAsState()
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    var currentPage by remember { mutableIntStateOf(0) }
+
+    BackHandler {
+        if (selectedIndex != null) {
+            selectedIndex = null
+        } else {
+            viewModel.backToCamera()
+        }
+    }
+
+    val displayTitle = if (selectedIndex == null) "Benchmark Results" else results[currentPage].title
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (selectedIndex == null) "Benchmark Results" else results[selectedIndex!!].title) },
+                title = { Text(displayTitle) },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (selectedIndex != null) {
@@ -53,7 +67,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 },
                 actions = {
                     if (selectedIndex == null) {
-                        IconButton(onClick = { viewModel.exportResults() }) {
+                        IconButton(onClick = { viewModel.exportResults(context) }) {
                             Icon(Icons.Default.Share, contentDescription = "Export")
                         }
                     }
@@ -64,13 +78,17 @@ fun ResultScreen(viewModel: CameraViewModel) {
         if (selectedIndex == null) {
             ResultGridView(
                 results = results,
-                onItemClick = { index -> selectedIndex = index },
+                onItemClick = { index ->
+                    selectedIndex = index
+                    currentPage = index
+                },
                 modifier = Modifier.padding(padding)
             )
         } else {
             ResultFullscreenView(
                 results = results,
                 initialIndex = selectedIndex!!,
+                onPageChanged = { page -> currentPage = page },
                 modifier = Modifier.padding(padding)
             )
         }
@@ -123,10 +141,15 @@ fun ResultGridView(
 fun ResultFullscreenView(
     results: List<BenchmarkResult>,
     initialIndex: Int,
+    onPageChanged: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val pagerState = rememberPagerState(initialPage = initialIndex, pageCount = { results.size })
     var isPagerScrollEnabled by remember { mutableStateOf(true) }
+
+    LaunchedEffect(pagerState.currentPage) {
+        onPageChanged(pagerState.currentPage)
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         HorizontalPager(

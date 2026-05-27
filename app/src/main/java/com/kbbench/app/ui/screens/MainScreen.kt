@@ -4,8 +4,14 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -13,15 +19,19 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kbbench.app.ui.components.CameraPreview
 import com.kbbench.app.viewmodel.AppScreen
 import com.kbbench.app.viewmodel.CameraViewModel
+import kotlinx.coroutines.delay
 
 @Composable
 fun MainScreen(viewModel: CameraViewModel = viewModel()) {
@@ -39,6 +49,20 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val captureFormat by viewModel.captureFormat.collectAsState()
     val zoomLevel by viewModel.zoomLevel.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
+    var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
+    var showFocusIndicator by remember { mutableStateOf(false) }
+
+    // Hide focus indicator after a short delay
+    LaunchedEffect(focusTapPosition) {
+        if (focusTapPosition != null) {
+            showFocusIndicator = true
+            delay(1000)
+            showFocusIndicator = false
+        }
+    }
+
+    // Prevent back from exiting the app on camera screen
+    BackHandler { /* consume back on camera screen */ }
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -73,6 +97,14 @@ fun CameraScreen(viewModel: CameraViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { offset ->
+                                focusTapPosition = offset
+                                viewModel.focusAt(offset.x, offset.y, size.width, size.height)
+                            }
+                        )
+                    }
                     .then(
                         if (!isRaw) {
                             Modifier.pointerInput(Unit) {
@@ -93,6 +125,30 @@ fun CameraScreen(viewModel: CameraViewModel) {
                         viewModel.startPreview(context, surface)
                     }
                 )
+
+                // Focus indicator
+                val focusPos = focusTapPosition
+                if (focusPos != null) {
+                    val indicatorSizeDp = 48.dp
+                    val indicatorSizePx = with(LocalDensity.current) { indicatorSizeDp.toPx() }
+                    AnimatedVisibility(
+                        visible = showFocusIndicator,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .offset {
+                                    IntOffset(
+                                        (focusPos.x - indicatorSizePx / 2).toInt(),
+                                        (focusPos.y - indicatorSizePx / 2).toInt()
+                                    )
+                                }
+                                .size(indicatorSizeDp)
+                                .border(2.dp, Color.White)
+                        )
+                    }
+                }
 
                 // Zoom Level Indicator
                 if (!isRaw && zoomLevel > 1f) {
