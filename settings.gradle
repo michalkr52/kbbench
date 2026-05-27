@@ -18,3 +18,4 @@ rootProject.name = 'kbbench'
 
 include 'app'
 include 'utils'
+include 'algorithm'
