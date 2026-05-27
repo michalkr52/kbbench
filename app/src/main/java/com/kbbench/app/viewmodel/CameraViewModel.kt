@@ -20,7 +20,8 @@ import android.view.OrientationEventListener.ORIENTATION_UNKNOWN
 import android.view.Surface
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.kbbench.algorithm.*
+import com.kbbench.algorithm.base.*
+import com.kbbench.algorithm.impl.AlgorithmRegistry
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.WhiteBalance
@@ -608,12 +609,9 @@ class CameraViewModel : ViewModel() {
                     imagePath = outFile.absolutePath,
                     rotationDegrees = 0,
                     metrics = BenchmarkMetrics(
-                        runtimeMs = output.timings.totalMs,
-                        extra = buildMap {
-                            if (output.timings.alignMs > 0) put("Align", "${output.timings.alignMs}ms")
-                            if (output.timings.processMs > 0) put("Process", "${output.timings.processMs}ms")
-                            if (output.timings.tonemapMs > 0) put("Tonemap", "${output.timings.tonemapMs}ms")
-                        }
+                        runtimeMs = output.totalTime,
+                        psnr = output.psnr,
+                        ssim = output.ssim,
                     )
                 ))
             } catch (e: Exception) {

@@ -17,25 +17,13 @@ enum class CfaPattern(val id: Int) {
 
 /**
  * Bilinear Bayer demosaicing: converts a normalized RAW Bayer mosaic into an ARGB_8888 pixel array.
- *
- * Usage:
- * ```
- * val pixels = BayerDemosaic.demosaic(rawValues, width, height, CfaPattern.RGGB)
- * ```
  */
 object BayerDemosaic {
 
     /**
      * Demosaics a RAW image represented as normalized floats (0..1) into ARGB_8888 pixels.
-     *
-     * @param raw Normalized sensor values in row-major order (size = width * height).
-     * @param width Image width in pixels.
-     * @param height Image height in pixels.
-     * @param pattern The Bayer CFA pattern of the sensor.
-     * @return IntArray of ARGB_8888 pixels (size = width * height).
      */
     fun demosaic(raw: FloatArray, width: Int, height: Int, pattern: CfaPattern): IntArray {
-        // Determine R and B positions within the 2x2 tile
         val rX: Int; val rY: Int
         val bX: Int; val bY: Int
         when (pattern) {
@@ -86,15 +74,6 @@ object BayerDemosaic {
 
     /**
      * Normalizes a 16-bit RAW buffer into floats using white and black levels.
-     *
-     * @param rawBuffer Raw 16-bit little-endian pixel values in row-major order.
-     * @param width Image width.
-     * @param height Image height.
-     * @param rowStride Row stride in bytes.
-     * @param pixelStride Pixel stride in bytes.
-     * @param whiteLevel Sensor white level (max meaningful value).
-     * @param blackLevel Sensor black level (pedestal to subtract).
-     * @return FloatArray of normalized values (0..1), size = width * height.
      */
     fun normalizeRaw16(
         rawBuffer: java.nio.ByteBuffer,

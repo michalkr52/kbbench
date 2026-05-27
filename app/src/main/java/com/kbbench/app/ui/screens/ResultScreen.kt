@@ -13,6 +13,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -391,9 +393,10 @@ fun CompareView(
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    var isVertical by remember { mutableStateOf(false) }
 
-    Row(
-        modifier = modifier
+    Box(modifier = modifier.fillMaxSize()) {
+        val gestureModifier = Modifier
             .fillMaxSize()
             .clipToBounds()
             .pointerInput(Unit) {
@@ -408,7 +411,7 @@ fun CompareView(
                     }
                 )
             }
-            .pointerInput(Unit) {
+            .pointerInput(isVertical) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     do {
@@ -422,9 +425,16 @@ fun CompareView(
                             scale = newScale
 
                             if (newScale > 1f) {
-                                // Each image is half the row width
-                                val maxX = size.width * (newScale - 1f) / 4f
-                                val maxY = size.height * (newScale - 1f) / 2f
+                                val maxX = if (isVertical) {
+                                    size.width * (newScale - 1f) / 2f
+                                } else {
+                                    size.width * (newScale - 1f) / 4f
+                                }
+                                val maxY = if (isVertical) {
+                                    size.height * (newScale - 1f) / 4f
+                                } else {
+                                    size.height * (newScale - 1f) / 2f
+                                }
                                 offset = Offset(
                                     (offset.x + pan.x).coerceIn(-maxX, maxX),
                                     (offset.y + pan.y).coerceIn(-maxY, maxY)
@@ -435,8 +445,16 @@ fun CompareView(
                             changes.forEach { if (it.positionChanged()) it.consume() }
                         } else if (changes.size == 1 && scale > 1.01f) {
                             val pan = event.calculatePan()
-                            val maxX = size.width * (scale - 1f) / 4f
-                            val maxY = size.height * (scale - 1f) / 2f
+                            val maxX = if (isVertical) {
+                                size.width * (scale - 1f) / 2f
+                            } else {
+                                size.width * (scale - 1f) / 4f
+                            }
+                            val maxY = if (isVertical) {
+                                size.height * (scale - 1f) / 4f
+                            } else {
+                                size.height * (scale - 1f) / 2f
+                            }
                             offset = Offset(
                                 (offset.x + pan.x).coerceIn(-maxX, maxX),
                                 (offset.y + pan.y).coerceIn(-maxY, maxY)
@@ -446,69 +464,92 @@ fun CompareView(
                     } while (changes.any { it.pressed })
                 }
             }
-    ) {
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .clipToBounds()
-        ) {
-            AsyncImage(
-                model = resultA.imagePath,
-                contentDescription = resultA.title,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        rotationZ = resultA.rotationDegrees.toFloat()
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offset.x
-                        translationY = offset.y
-                    },
-                contentScale = ContentScale.Fit
-            )
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                Text(
-                    text = resultA.title,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                    style = MaterialTheme.typography.labelSmall
+
+        if (isVertical) {
+            Column(modifier = gestureModifier) {
+                CompareImageBox(
+                    result = resultA,
+                    scale = scale,
+                    offset = offset,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+                CompareImageBox(
+                    result = resultB,
+                    scale = scale,
+                    offset = offset,
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+            }
+        } else {
+            Row(modifier = gestureModifier) {
+                CompareImageBox(
+                    result = resultA,
+                    scale = scale,
+                    offset = offset,
+                    modifier = Modifier.weight(1f).fillMaxHeight()
+                )
+                CompareImageBox(
+                    result = resultB,
+                    scale = scale,
+                    offset = offset,
+                    modifier = Modifier.weight(1f).fillMaxHeight()
                 )
             }
         }
 
-        Box(
+        // Toggle button
+        IconButton(
+            onClick = {
+                isVertical = !isVertical
+                scale = 1f
+                offset = Offset.Zero
+            },
             modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .clipToBounds()
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
         ) {
-            AsyncImage(
-                model = resultB.imagePath,
-                contentDescription = resultB.title,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        rotationZ = resultB.rotationDegrees.toFloat()
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offset.x
-                        translationY = offset.y
-                    },
-                contentScale = ContentScale.Fit
+            Icon(
+                imageVector = if (isVertical) Icons.Default.MoreVert else Icons.Default.MoreHoriz,
+                contentDescription = if (isVertical) "Switch to horizontal" else "Switch to vertical",
+                tint = MaterialTheme.colorScheme.onSurface
             )
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                Text(
-                    text = resultB.title,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
+        }
+    }
+}
+
+@Composable
+private fun CompareImageBox(
+    result: BenchmarkResult,
+    scale: Float,
+    offset: Offset,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier.clipToBounds()
+    ) {
+        AsyncImage(
+            model = result.imagePath,
+            contentDescription = result.title,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    rotationZ = result.rotationDegrees.toFloat()
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                },
+            contentScale = ContentScale.Fit
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Text(
+                text = result.title,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
