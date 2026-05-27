@@ -1,4 +1,4 @@
-package com.kbbench.algorithm
+package com.kbbench.algorithm.base
 
 /**
  * Result produced by an [ImageAlgorithm].
@@ -7,12 +7,17 @@ package com.kbbench.algorithm
  *   (size = [width] * [height]), same format as [AlgorithmInput.frames].
  * @property width Output frame width in pixels.
  * @property height Output frame height in pixels.
- * @property timings Per-phase timing breakdown of the run.
+ * @property totalTime Total processing time of the algorithm, in milliseconds.
+ * @property psnr Peak signal-to-noise ratio computed against the first input frame.
+ * @property ssim Structural similarity index computed against the first input frame.
  */
 data class AlgorithmOutput(
     val pixels: IntArray,
     val width: Int,
     val height: Int,
-    val timings: PhaseTiming,
+    val totalTime: Long,
+    val psnr: Double,
+    val ssim: Double,
 )
+
 
