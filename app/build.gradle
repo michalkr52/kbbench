@@ -16,6 +16,7 @@
 
 apply plugin: 'android'
 apply plugin: 'kotlin-android'
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 apply plugin: 'kotlin-kapt'
 apply plugin: "androidx.navigation.safeargs"
 
@@ -27,12 +28,12 @@ android {
         viewBinding true
     }
     namespace "com.kbbench.app"
-    compileSdk 34
+    compileSdk 36
     defaultConfig {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         applicationId "com.kbbench.app"
-        minSdkVersion 21
-        targetSdk 34
+        minSdkVersion 23
+        targetSdk 36
         versionCode 1
         versionName "1.0.0"
     }
@@ -54,8 +55,9 @@ android {
     }
 
     buildFeatures {
-        viewBinding true
-        dataBinding true
+        viewBinding false
+        dataBinding false
+        compose true
     }
 }
 
@@ -63,6 +65,20 @@ android {
 
 dependencies {
     implementation project(':utils')
+    implementation project(':algorithm')
+
+    // Compose
+    def compose_version = '1.11.1'
+    implementation "androidx.compose.ui:ui:$compose_version"
+    implementation "androidx.compose.ui:ui-graphics:$compose_version"
+    implementation "androidx.compose.ui:ui-tooling-preview:$compose_version"
+    implementation "androidx.compose.material3:material3:1.4.0"
+    implementation "androidx.compose.material:material-icons-core:1.7.0"
+    implementation "androidx.compose.material:material-icons-extended:1.7.0"
+    implementation "androidx.activity:activity-compose:1.13.0"
+    implementation "androidx.compose.runtime:runtime-livedata:$compose_version"
+    implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3"
+    implementation "io.coil-kt:coil-compose:2.7.0"
 
     // Kotlin lang
     implementation 'androidx.core:core-ktx:1.13.1'
