@@ -1,6 +1,7 @@
 package com.kbbench.algorithm
 
 import com.kbbench.algorithm.base.AlgorithmInput
+import com.kbbench.algorithm.base.calculateQualityMetrics
 import com.kbbench.algorithm.impl.ContrastStretching
 import java.awt.image.BufferedImage
 import java.io.File
@@ -48,12 +49,13 @@ class ContrastStretchingImageIoTest {
 
         val output = ContrastStretching().process(input)
         val after = computeMetrics(output.pixels)
+        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.pixels)
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
         assertEquals(width * height, output.pixels.size)
-        assertTrue(!output.psnr.isNaN(), "PSNR should be a valid number or +Infinity")
-        assertTrue(output.ssim in -1.0..1.0, "SSIM should stay in [-1, 1], got ${output.ssim}")
+        assertTrue(!quality.psnr.isNaN(), "PSNR should be a valid number or +Infinity")
+        assertTrue(quality.ssim in -1.0..1.0, "SSIM should stay in [-1, 1], got ${quality.ssim}")
 
         // Contrast stretching should not shrink per-channel dynamic range.
         assertTrue(after.r.range >= before.r.range, "R range shrank: ${before.r.range} -> ${after.r.range}")
@@ -65,7 +67,7 @@ class ContrastStretchingImageIoTest {
         ImageIO.write(outImg, "png", outputFile)
 
         val metricsFile = File("build/test-output/contrast_metrics.txt")
-        metricsFile.writeText(buildMetricsReport(inputFile, before, after, output.totalTime, output.psnr, output.ssim))
+        metricsFile.writeText(buildMetricsReport(inputFile, before, after, output.totalTime, quality.psnr, quality.ssim))
         println(metricsFile.readText())
 
         assertTrue(outputFile.exists(), "Brak pliku wyjsciowego: ${outputFile.path}")
@@ -187,4 +189,3 @@ class ContrastStretchingImageIoTest {
         val lumaStd: Double,
     )
 }
-

@@ -1,6 +1,9 @@
 package com.kbbench.app.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
@@ -37,11 +40,18 @@ import com.kbbench.app.viewmodel.CameraViewModel
 fun ResultScreen(viewModel: CameraViewModel) {
     val context = LocalContext.current
     val results by viewModel.benchmarkResults.collectAsState()
+    val referenceImage by viewModel.referenceImage.collectAsState()
+    val referenceComparisonEnabled by viewModel.referenceComparisonEnabled.collectAsState()
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var currentPage by remember { mutableIntStateOf(0) }
     var isSelectingForCompare by remember { mutableStateOf(false) }
     var compareSelection by remember { mutableStateOf(setOf<Int>()) }
     var compareIndices by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    val loadReferenceLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri -> uri?.let { viewModel.loadReferenceImage(context, it) } }
+    )
 
     BackHandler {
         when {
@@ -125,40 +135,70 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 )
             }
             else -> {
-                ResultGridView(
-                    results = results,
-                    isSelectingForCompare = isSelectingForCompare,
-                    compareSelection = compareSelection,
-                    onItemClick = { index ->
-                        if (isSelectingForCompare) {
-                            compareSelection = if (index in compareSelection) {
-                                compareSelection - index
-                            } else if (compareSelection.size < 2) {
-                                compareSelection + index
-                            } else {
-                                compareSelection
+                Column(modifier = Modifier.padding(padding)) {
+                    if (referenceComparisonEnabled && referenceImage == null) {
+                        Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Load a reference image to see quality metrics",
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedButton(onClick = {
+                                    loadReferenceLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                }) {
+                                    Text("Load")
+                                }
                             }
-                        } else {
-                            selectedIndex = index
-                            currentPage = index
                         }
-                    },
-                    onSelectForCompare = {
-                        isSelectingForCompare = true
-                        compareSelection = emptySet()
-                    },
-                    onCancelCompare = {
-                        isSelectingForCompare = false
-                        compareSelection = emptySet()
-                    },
-                    onCompare = {
-                        val sorted = compareSelection.sorted()
-                        compareIndices = Pair(sorted[0], sorted[1])
-                        isSelectingForCompare = false
-                        compareSelection = emptySet()
-                    },
-                    modifier = Modifier.padding(padding)
-                )
+                    }
+                    ResultGridView(
+                        results = results,
+                        isSelectingForCompare = isSelectingForCompare,
+                        compareSelection = compareSelection,
+                        hasReference = referenceImage != null,
+                        onCompareWithReference = {
+                            val referenceIndex = results.indexOfFirst { it.id == "reference" }
+                            if (referenceIndex >= 0) {
+                                isSelectingForCompare = true
+                                compareSelection = setOf(referenceIndex)
+                            }
+                        },
+                        onItemClick = { index ->
+                            if (isSelectingForCompare) {
+                                compareSelection = if (index in compareSelection) {
+                                    compareSelection - index
+                                } else if (compareSelection.size < 2) {
+                                    compareSelection + index
+                                } else {
+                                    compareSelection
+                                }
+                            } else {
+                                selectedIndex = index
+                                currentPage = index
+                            }
+                        },
+                        onSelectForCompare = {
+                            isSelectingForCompare = true
+                            compareSelection = emptySet()
+                        },
+                        onCancelCompare = {
+                            isSelectingForCompare = false
+                            compareSelection = emptySet()
+                        },
+                        onCompare = {
+                            val sorted = compareSelection.sorted()
+                            compareIndices = Pair(sorted[0], sorted[1])
+                            isSelectingForCompare = false
+                            compareSelection = emptySet()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }
@@ -169,10 +209,12 @@ fun ResultGridView(
     results: List<BenchmarkResult>,
     isSelectingForCompare: Boolean,
     compareSelection: Set<Int>,
+    hasReference: Boolean,
     onItemClick: (Int) -> Unit,
     onSelectForCompare: () -> Unit,
     onCancelCompare: () -> Unit,
     onCompare: () -> Unit,
+    onCompareWithReference: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxSize()) {
@@ -246,6 +288,11 @@ fun ResultGridView(
                         Text("Compare")
                     }
                 } else {
+                    if (hasReference) {
+                        OutlinedButton(onClick = onCompareWithReference) {
+                            Text("Compare with reference")
+                        }
+                    }
                     OutlinedButton(onClick = onSelectForCompare) {
                         Text("Select for comparison")
                     }

@@ -6,15 +6,19 @@ import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,9 +53,15 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val captureFormat by viewModel.captureFormat.collectAsState()
     val zoomLevel by viewModel.zoomLevel.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
+    val referenceComparisonEnabled by viewModel.referenceComparisonEnabled.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
+
+    val uploadInputLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri -> uri?.let { viewModel.loadInputFromGallery(context, it) } }
+    )
 
     // Hide focus indicator after a short delay
     LaunchedEffect(focusTapPosition) {
@@ -124,6 +134,35 @@ fun CameraScreen(viewModel: CameraViewModel) {
                     }
                 )
 
+                // Reference-comparison mode switch
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 16.dp, start = 16.dp),
+                    contentAlignment = Alignment.TopStart
+                ) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.5f),
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Compare with reference",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            Switch(
+                                checked = referenceComparisonEnabled,
+                                onCheckedChange = { viewModel.setReferenceComparisonEnabled(it) },
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                }
+
                 // Focus indicator
                 val focusPos = focusTapPosition
                 if (focusPos != null) {
@@ -170,7 +209,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                     }
                 }
 
-                // Format Toggle and Shutter
+                // Upload + Shutter, then Format toggle below
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -180,6 +219,38 @@ fun CameraScreen(viewModel: CameraViewModel) {
                 ) {
                     Row(
                         modifier = Modifier.padding(bottom = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                uploadInputLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            enabled = !isProcessing,
+                            modifier = Modifier
+                                .padding(end = 24.dp)
+                                .size(56.dp)
+                                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PhotoLibrary,
+                                contentDescription = "Load input image",
+                                tint = Color.White
+                            )
+                        }
+
+                        Button(
+                            onClick = { viewModel.takePhoto(context) },
+                            modifier = Modifier.size(80.dp),
+                            shape = CircleShape,
+                            enabled = !isProcessing
+                        ) {
+                            // Empty content for now
+                        }
+                    }
+
+                    Row(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Format: ", color = Color.White)
@@ -198,15 +269,6 @@ fun CameraScreen(viewModel: CameraViewModel) {
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
-                    }
-
-                    Button(
-                        onClick = { viewModel.takePhoto(context) },
-                        modifier = Modifier.size(80.dp),
-                        shape = CircleShape,
-                        enabled = !isProcessing
-                    ) {
-                        // Empty content for now
                     }
                 }
             }

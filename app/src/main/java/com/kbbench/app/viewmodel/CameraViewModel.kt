@@ -12,6 +12,7 @@ import android.hardware.camera2.params.MeteringRectangle
 import androidx.core.content.FileProvider
 import androidx.exifinterface.media.ExifInterface
 import android.media.ImageReader
+import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -25,6 +26,8 @@ import com.kbbench.algorithm.impl.AlgorithmRegistry
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.WhiteBalance
+import com.kbbench.utils.centerCropAndScale
+import com.kbbench.utils.decodeBitmapFromUri
 import com.kbbench.utils.getPreviewOutputSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,6 +78,18 @@ data class BenchmarkResult(
     val metrics: BenchmarkMetrics = BenchmarkMetrics()
 )
 
+/** A user-supplied ground-truth image to score algorithm outputs against. */
+data class ReferenceImage(val bitmap: Bitmap, val displayPath: String)
+
+/** Raw output of one algorithm run, kept in memory to rescoring without re-running the algorithm. */
+private data class AlgorithmOutputRecord(
+    val id: String,
+    val pixels: IntArray,
+    val width: Int,
+    val height: Int,
+    val runtimeMs: Long,
+)
+
 class CameraViewModel : ViewModel() {
 
     // TODO: Add algorithm selection UI; for now all registered algorithms are used
@@ -91,6 +106,14 @@ class CameraViewModel : ViewModel() {
 
     private val _captureFormat = MutableStateFlow(ImageFormat.JPEG)
     val captureFormat = _captureFormat.asStateFlow()
+
+    private val _referenceComparisonEnabled = MutableStateFlow(true)
+    val referenceComparisonEnabled = _referenceComparisonEnabled.asStateFlow()
+
+    private val _referenceImage = MutableStateFlow<ReferenceImage?>(null)
+    val referenceImage = _referenceImage.asStateFlow()
+
+    private var lastAlgorithmOutputs: List<AlgorithmOutputRecord> = emptyList()
 
     private val _benchmarkResults = MutableStateFlow<List<BenchmarkResult>>(emptyList())
     val benchmarkResults = _benchmarkResults.asStateFlow()
@@ -122,6 +145,10 @@ class CameraViewModel : ViewModel() {
         if (format == ImageFormat.RAW_SENSOR) {
             _zoomLevel.value = 1f
         }
+    }
+
+    fun setReferenceComparisonEnabled(enabled: Boolean) {
+        _referenceComparisonEnabled.value = enabled
     }
 
     fun initialize(context: Context) {
@@ -394,6 +421,7 @@ class CameraViewModel : ViewModel() {
                 // Run algorithms and build results
                 runBenchmarks(context, file, algorithms, pixelArrays, width, height,
                     exposureTimes, isoValues, captureTimeMs, originalRotation, outputRotation)
+                recomputeMetricsWithReference()
 
                 _currentScreen.value = AppScreen.RESULTS
                 closeCamera()
@@ -553,6 +581,7 @@ class CameraViewModel : ViewModel() {
         Log.d("CameraViewModel", "Running ${algorithms.size} algorithms on ${frames.size} frame(s)")
 
         val results = mutableListOf<BenchmarkResult>()
+        val outputRecords = mutableListOf<AlgorithmOutputRecord>()
 
         // Original image as baseline
         results.add(BenchmarkResult(
@@ -588,6 +617,7 @@ class CameraViewModel : ViewModel() {
 
             try {
                 val output = algo.process(input)
+                val id = algo.name.lowercase(Locale.US)
 
                 // Save output pixels as PNG (physically rotated for correct display)
                 val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
@@ -603,16 +633,13 @@ class CameraViewModel : ViewModel() {
                 FileOutputStream(outFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
                 bitmap.recycle()
 
+                outputRecords.add(AlgorithmOutputRecord(id, output.pixels, output.width, output.height, output.totalTime))
                 results.add(BenchmarkResult(
-                    id = algo.name.lowercase(Locale.US),
+                    id = id,
                     title = algo.name,
                     imagePath = outFile.absolutePath,
                     rotationDegrees = 0,
-                    metrics = BenchmarkMetrics(
-                        runtimeMs = output.totalTime,
-                        psnr = output.psnr,
-                        ssim = output.ssim,
-                    )
+                    metrics = BenchmarkMetrics(runtimeMs = output.totalTime)
                 ))
             } catch (e: Exception) {
                 Log.e("CameraViewModel", "Algorithm ${algo.name} failed", e)
@@ -626,12 +653,109 @@ class CameraViewModel : ViewModel() {
             }
         }
 
+        lastAlgorithmOutputs = outputRecords
         _benchmarkResults.value = results
     }
 
     fun backToCamera() {
         _currentScreen.value = AppScreen.CAMERA
         _benchmarkResults.value = emptyList()
+        lastAlgorithmOutputs = emptyList()
+        _referenceImage.value?.bitmap?.recycle()
+        _referenceImage.value = null
+    }
+
+    /** Bypasses the camera and runs all registered algorithms on a single picked image. */
+    fun loadInputFromGallery(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _isProcessing.value = true
+            try {
+                val bitmap = decodeBitmapFromUri(context, uri) ?: return@launch
+                val width = bitmap.width
+                val height = bitmap.height
+                val pixels = IntArray(width * height)
+                bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+                val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+                val file = File(context.filesDir, "IMG_${sdf.format(Date())}.jpg")
+                FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                bitmap.recycle()
+
+                runBenchmarks(
+                    context, file, algorithmRegistry.getAll(), listOf(pixels), width, height,
+                    exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
+                    originalRotation = 0, outputRotation = 0
+                )
+                recomputeMetricsWithReference()
+
+                _currentScreen.value = AppScreen.RESULTS
+                closeCamera()
+            } catch (e: Exception) {
+                Log.e("CameraViewModel", "Error loading input image", e)
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    /** Loads a user-picked ground-truth image and rescoring existing results against it. */
+    fun loadReferenceImage(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val bitmap = decodeBitmapFromUri(context, uri) ?: return@launch
+                val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+                val file = File(context.filesDir, "REF_${sdf.format(Date())}.jpg")
+                FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+
+                _referenceImage.value?.bitmap?.recycle()
+                _referenceImage.value = ReferenceImage(bitmap, file.absolutePath)
+                recomputeMetricsWithReference()
+            } catch (e: Exception) {
+                Log.e("CameraViewModel", "Error loading reference image", e)
+            }
+        }
+    }
+
+    fun clearReferenceImage() {
+        _referenceImage.value?.bitmap?.recycle()
+        _referenceImage.value = null
+        recomputeMetricsWithReference()
+    }
+
+    /** Rescoring all stored algorithm outputs against the current reference image, if any. */
+    private fun recomputeMetricsWithReference() {
+        val reference = _referenceImage.value
+        val updated = _benchmarkResults.value
+            .filterNot { it.id == "reference" }
+            .map { result ->
+                val record = lastAlgorithmOutputs.find { it.id == result.id }
+                if (record != null) {
+                    result.copy(metrics = metricsFor(record.runtimeMs, record.pixels, record.width, record.height))
+                } else {
+                    result
+                }
+            }
+            .toMutableList()
+
+        if (reference != null) {
+            val insertIndex = if (updated.isNotEmpty()) 1 else 0
+            updated.add(
+                insertIndex.coerceAtMost(updated.size),
+                BenchmarkResult(id = "reference", title = "Reference", imagePath = reference.displayPath)
+            )
+        }
+
+        _benchmarkResults.value = updated
+    }
+
+    private fun metricsFor(runtimeMs: Long, pixels: IntArray, width: Int, height: Int): BenchmarkMetrics {
+        val reference = _referenceImage.value ?: return BenchmarkMetrics(runtimeMs = runtimeMs)
+        val aligned = centerCropAndScale(reference.bitmap, width, height)
+        val refPixels = IntArray(width * height)
+        aligned.getPixels(refPixels, 0, width, 0, 0, width, height)
+        aligned.recycle()
+        val quality = calculateQualityMetrics(referencePixels = refPixels, candidatePixels = pixels)
+        return BenchmarkMetrics(runtimeMs = runtimeMs, psnr = quality.psnr, ssim = quality.ssim)
     }
 
     fun exportResults(context: Context) {
@@ -737,6 +861,7 @@ class CameraViewModel : ViewModel() {
         camera?.close()
         cameraThread.quitSafely()
         imageReaderThread.quitSafely()
+        _referenceImage.value?.bitmap?.recycle()
     }
 
     data class CombinedResult(val image: android.media.Image, val metadata: TotalCaptureResult)

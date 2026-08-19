@@ -2,12 +2,12 @@ package com.kbbench.algorithm.base
 
 import kotlin.math.log10
 
-internal data class QualityMetrics(
+data class QualityMetrics(
     val psnr: Double,
     val ssim: Double,
 )
 
-internal fun calculateQualityMetrics(referencePixels: IntArray, candidatePixels: IntArray): QualityMetrics {
+fun calculateQualityMetrics(referencePixels: IntArray, candidatePixels: IntArray): QualityMetrics {
     require(referencePixels.size == candidatePixels.size) {
         "Reference and candidate images must have the same number of pixels"
     }
@@ -75,5 +75,3 @@ internal fun calculateQualityMetrics(referencePixels: IntArray, candidatePixels:
         ssim = ssim,
     )
 }
-
-
