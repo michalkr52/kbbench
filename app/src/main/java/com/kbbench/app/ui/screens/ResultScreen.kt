@@ -45,7 +45,6 @@ fun ResultScreen(viewModel: CameraViewModel) {
     val context = LocalContext.current
     val results by viewModel.benchmarkResults.collectAsState()
     val referenceImage by viewModel.referenceImage.collectAsState()
-    val referenceComparisonEnabled by viewModel.referenceComparisonEnabled.collectAsState()
     val referenceIndex = results.indexOfFirst { it.id == "reference" }
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var currentPage by remember { mutableIntStateOf(0) }
@@ -143,7 +142,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
             }
             else -> {
                 Column(modifier = Modifier.padding(padding)) {
-                    if (referenceComparisonEnabled && referenceImage == null) {
+                    if (referenceImage == null) {
                         Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(12.dp),

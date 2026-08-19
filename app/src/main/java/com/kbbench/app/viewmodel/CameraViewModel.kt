@@ -107,9 +107,6 @@ class CameraViewModel : ViewModel() {
     private val _captureFormat = MutableStateFlow(ImageFormat.JPEG)
     val captureFormat = _captureFormat.asStateFlow()
 
-    private val _referenceComparisonEnabled = MutableStateFlow(true)
-    val referenceComparisonEnabled = _referenceComparisonEnabled.asStateFlow()
-
     private val _referenceImage = MutableStateFlow<ReferenceImage?>(null)
     val referenceImage = _referenceImage.asStateFlow()
 
@@ -145,10 +142,6 @@ class CameraViewModel : ViewModel() {
         if (format == ImageFormat.RAW_SENSOR) {
             _zoomLevel.value = 1f
         }
-    }
-
-    fun setReferenceComparisonEnabled(enabled: Boolean) {
-        _referenceComparisonEnabled.value = enabled
     }
 
     fun initialize(context: Context) {

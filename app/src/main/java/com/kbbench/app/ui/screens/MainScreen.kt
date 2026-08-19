@@ -53,7 +53,6 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val captureFormat by viewModel.captureFormat.collectAsState()
     val zoomLevel by viewModel.zoomLevel.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
-    val referenceComparisonEnabled by viewModel.referenceComparisonEnabled.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
@@ -256,63 +255,39 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             }
                         }
 
-                        Column(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 24.dp)
+                                .padding(horizontal = 24.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Text(
+                                text = "Format",
+                                color = Color.White,
+                                modifier = Modifier.weight(1f)
+                            )
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End
                             ) {
-                                Text(
-                                    text = "Format",
-                                    color = Color.White,
-                                    modifier = Modifier.weight(1f)
+                                val formats = listOf(
+                                    "JPEG" to ImageFormat.JPEG,
+                                    "RAW" to ImageFormat.RAW_SENSOR
                                 )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    val formats = listOf(
-                                        "JPEG" to ImageFormat.JPEG,
-                                        "RAW" to ImageFormat.RAW_SENSOR
+                                formats.forEach { (name, format) ->
+                                    FilterChip(
+                                        selected = captureFormat == format,
+                                        onClick = {
+                                            if (controlsEnabled) {
+                                                viewModel.setCaptureFormat(format)
+                                                lastSurface?.let { viewModel.startPreview(context, it) }
+                                            }
+                                        },
+                                        enabled = controlsEnabled,
+                                        label = { Text(name) },
+                                        modifier = Modifier.padding(horizontal = 4.dp)
                                     )
-                                    formats.forEach { (name, format) ->
-                                        FilterChip(
-                                            selected = captureFormat == format,
-                                            onClick = {
-                                                if (controlsEnabled) {
-                                                    viewModel.setCaptureFormat(format)
-                                                    lastSurface?.let { viewModel.startPreview(context, it) }
-                                                }
-                                            },
-                                            enabled = controlsEnabled,
-                                            label = { Text(name) },
-                                            modifier = Modifier.padding(horizontal = 4.dp)
-                                        )
-                                    }
                                 }
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Compare with reference",
-                                    color = Color.White,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Switch(
-                                    checked = referenceComparisonEnabled,
-                                    enabled = controlsEnabled,
-                                    onCheckedChange = { if (controlsEnabled) viewModel.setReferenceComparisonEnabled(it) }
-                                )
                             }
                         }
                     }
