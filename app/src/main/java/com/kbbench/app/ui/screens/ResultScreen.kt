@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
@@ -13,9 +14,12 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CompareArrows
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
@@ -42,6 +46,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     val results by viewModel.benchmarkResults.collectAsState()
     val referenceImage by viewModel.referenceImage.collectAsState()
     val referenceComparisonEnabled by viewModel.referenceComparisonEnabled.collectAsState()
+    val referenceIndex = results.indexOfFirst { it.id == "reference" }
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var currentPage by remember { mutableIntStateOf(0) }
     var isSelectingForCompare by remember { mutableStateOf(false) }
@@ -131,6 +136,8 @@ fun ResultScreen(viewModel: CameraViewModel) {
                     results = results,
                     initialIndex = selectedIndex!!,
                     onPageChanged = { page -> currentPage = page },
+                    referenceIndex = referenceIndex,
+                    onCompareWithReference = { page -> compareIndices = Pair(referenceIndex, page) },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -143,15 +150,27 @@ fun ResultScreen(viewModel: CameraViewModel) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Load a reference image to see quality metrics",
+                                    text = "Load a reference image to calculate quality metrics",
                                     modifier = Modifier.weight(1f)
                                 )
-                                OutlinedButton(onClick = {
-                                    loadReferenceLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                IconButton(
+                                    onClick = {
+                                        loadReferenceLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme.primaryContainer,
+                                            CircleShape
+                                        )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FileUpload,
+                                        contentDescription = "Load reference image",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
-                                }) {
-                                    Text("Load")
                                 }
                             }
                         }
@@ -160,14 +179,6 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         results = results,
                         isSelectingForCompare = isSelectingForCompare,
                         compareSelection = compareSelection,
-                        hasReference = referenceImage != null,
-                        onCompareWithReference = {
-                            val referenceIndex = results.indexOfFirst { it.id == "reference" }
-                            if (referenceIndex >= 0) {
-                                isSelectingForCompare = true
-                                compareSelection = setOf(referenceIndex)
-                            }
-                        },
                         onItemClick = { index ->
                             if (isSelectingForCompare) {
                                 compareSelection = if (index in compareSelection) {
@@ -209,12 +220,10 @@ fun ResultGridView(
     results: List<BenchmarkResult>,
     isSelectingForCompare: Boolean,
     compareSelection: Set<Int>,
-    hasReference: Boolean,
     onItemClick: (Int) -> Unit,
     onSelectForCompare: () -> Unit,
     onCancelCompare: () -> Unit,
     onCompare: () -> Unit,
-    onCompareWithReference: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxSize()) {
@@ -288,11 +297,6 @@ fun ResultGridView(
                         Text("Compare")
                     }
                 } else {
-                    if (hasReference) {
-                        OutlinedButton(onClick = onCompareWithReference) {
-                            Text("Compare with reference")
-                        }
-                    }
                     OutlinedButton(onClick = onSelectForCompare) {
                         Text("Select for comparison")
                     }
@@ -307,6 +311,8 @@ fun ResultFullscreenView(
     results: List<BenchmarkResult>,
     initialIndex: Int,
     onPageChanged: (Int) -> Unit,
+    referenceIndex: Int = -1,
+    onCompareWithReference: (Int) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val pagerState = rememberPagerState(initialPage = initialIndex, pageCount = { results.size })
@@ -403,6 +409,25 @@ fun ResultFullscreenView(
                         },
                     contentScale = ContentScale.Fit
                 )
+
+                if (referenceIndex >= 0 && page != referenceIndex) {
+                    IconButton(
+                        onClick = { onCompareWithReference(page) },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.CompareArrows,
+                            contentDescription = "Compare with reference",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
 

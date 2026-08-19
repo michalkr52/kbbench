@@ -100,174 +100,220 @@ fun CameraScreen(viewModel: CameraViewModel) {
         if (hasCameraPermission) {
             val isRaw = captureFormat == ImageFormat.RAW_SENSOR
             val previewSize by viewModel.previewSize.collectAsState()
+            val controlsEnabled = !isProcessing
 
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { offset ->
-                                focusTapPosition = offset
-                                viewModel.focusAt(offset.x, offset.y, size.width, size.height)
-                            }
-                        )
-                    }
-                    .then(
-                        if (!isRaw) {
-                            Modifier.pointerInput(Unit) {
-                                detectTransformGestures { _, _, zoom, _ ->
-                                    viewModel.setZoom(zoom)
-                                }
-                            }
-                        } else Modifier
-                    )
             ) {
-                CameraPreview(
-                    modifier = Modifier.fillMaxSize(),
-                    previewWidth = previewSize?.width ?: 0,
-                    previewHeight = previewSize?.height ?: 0,
-                    onSurfaceCreated = { surface ->
-                        lastSurface = surface
-                        viewModel.initialize(context)
-                        viewModel.startPreview(context, surface)
-                    }
-                )
-
-                // Reference-comparison mode switch
+                // Camera preview / loaded image, aligned to the top and sized to its own aspect ratio
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 16.dp, start = 16.dp),
-                    contentAlignment = Alignment.TopStart
-                ) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.5f),
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Compare with reference",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelLarge
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { offset ->
+                                    if (controlsEnabled) {
+                                        focusTapPosition = offset
+                                        viewModel.focusAt(offset.x, offset.y, size.width, size.height)
+                                    }
+                                }
                             )
-                            Switch(
-                                checked = referenceComparisonEnabled,
-                                onCheckedChange = { viewModel.setReferenceComparisonEnabled(it) },
-                                modifier = Modifier.padding(start = 8.dp)
+                        }
+                        .then(
+                            if (!isRaw) {
+                                Modifier.pointerInput(Unit) {
+                                    detectTransformGestures { _, _, zoom, _ ->
+                                        if (controlsEnabled) {
+                                            viewModel.setZoom(zoom)
+                                        }
+                                    }
+                                }
+                            } else Modifier
+                        )
+                ) {
+                    CameraPreview(
+                        modifier = Modifier.fillMaxWidth(),
+                        previewWidth = previewSize?.width ?: 0,
+                        previewHeight = previewSize?.height ?: 0,
+                        onSurfaceCreated = { surface ->
+                            lastSurface = surface
+                            viewModel.initialize(context)
+                            viewModel.startPreview(context, surface)
+                        }
+                    )
+
+                    // Focus indicator
+                    val focusPos = focusTapPosition
+                    if (focusPos != null) {
+                        val indicatorSizeDp = 48.dp
+                        val indicatorSizePx = with(LocalDensity.current) { indicatorSizeDp.toPx() }
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = showFocusIndicator,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .offset {
+                                        IntOffset(
+                                            (focusPos.x - indicatorSizePx / 2).toInt(),
+                                            (focusPos.y - indicatorSizePx / 2).toInt()
+                                        )
+                                    }
+                                    .size(indicatorSizeDp)
+                                    .border(2.dp, Color.White)
                             )
                         }
                     }
-                }
 
-                // Focus indicator
-                val focusPos = focusTapPosition
-                if (focusPos != null) {
-                    val indicatorSizeDp = 48.dp
-                    val indicatorSizePx = with(LocalDensity.current) { indicatorSizeDp.toPx() }
-                    AnimatedVisibility(
-                        visible = showFocusIndicator,
-                        enter = fadeIn(),
-                        exit = fadeOut()
-                    ) {
+                    // Zoom Level Indicator
+                    if (!isRaw && zoomLevel > 1f) {
                         Box(
                             modifier = Modifier
-                                .offset {
-                                    IntOffset(
-                                        (focusPos.x - indicatorSizePx / 2).toInt(),
-                                        (focusPos.y - indicatorSizePx / 2).toInt()
-                                    )
-                                }
-                                .size(indicatorSizeDp)
-                                .border(2.dp, Color.White)
-                        )
-                    }
-                }
-
-                // Zoom Level Indicator
-                if (!isRaw && zoomLevel > 1f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = 16.dp),
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.5f),
-                            shape = CircleShape
+                                .matchParentSize()
+                                .padding(top = 16.dp),
+                            contentAlignment = Alignment.TopCenter
                         ) {
-                            Text(
-                                text = "%.1fx".format(zoomLevel),
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                        }
-                    }
-                }
-
-                // Upload + Shutter, then Format toggle below
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Bottom
-                ) {
-                    Row(
-                        modifier = Modifier.padding(bottom = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = {
-                                uploadInputLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.5f),
+                                shape = CircleShape
+                            ) {
+                                Text(
+                                    text = "%.1fx".format(zoomLevel),
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.labelLarge
                                 )
-                            },
-                            enabled = !isProcessing,
-                            modifier = Modifier
-                                .padding(end = 24.dp)
-                                .size(56.dp)
-                                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.PhotoLibrary,
-                                contentDescription = "Load input image",
-                                tint = Color.White
-                            )
-                        }
-
-                        Button(
-                            onClick = { viewModel.takePhoto(context) },
-                            modifier = Modifier.size(80.dp),
-                            shape = CircleShape,
-                            enabled = !isProcessing
-                        ) {
-                            // Empty content for now
+                            }
                         }
                     }
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
+                    // Spinning loader shown while a captured/loaded image is being processed
+                    Box(
+                        modifier = Modifier.matchParentSize(),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text("Format: ", color = Color.White)
-                        val formats = listOf(
-                            "JPEG" to ImageFormat.JPEG,
-                            "RAW" to ImageFormat.RAW_SENSOR
-                        )
-                        formats.forEach { (name, format) ->
-                            FilterChip(
-                                selected = captureFormat == format,
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isProcessing,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.5f),
+                                shape = CircleShape
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .padding(16.dp)
+                                        .size(40.dp),
+                                    color = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Controls occupy the remaining space below the image and are centered within it
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(
+                            modifier = Modifier.padding(bottom = 32.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
                                 onClick = {
-                                    viewModel.setCaptureFormat(format)
-                                    lastSurface?.let { viewModel.startPreview(context, it) }
+                                    uploadInputLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
                                 },
-                                label = { Text(name) },
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
+                                enabled = !isProcessing,
+                                modifier = Modifier
+                                    .padding(end = 24.dp)
+                                    .size(56.dp)
+                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PhotoLibrary,
+                                    contentDescription = "Load input image",
+                                    tint = Color.White
+                                )
+                            }
+
+                            Button(
+                                onClick = { viewModel.takePhoto(context) },
+                                modifier = Modifier.size(80.dp),
+                                shape = CircleShape,
+                                enabled = !isProcessing
+                            ) {
+                                // Empty content for now
+                            }
+                        }
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Format",
+                                    color = Color.White,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    val formats = listOf(
+                                        "JPEG" to ImageFormat.JPEG,
+                                        "RAW" to ImageFormat.RAW_SENSOR
+                                    )
+                                    formats.forEach { (name, format) ->
+                                        FilterChip(
+                                            selected = captureFormat == format,
+                                            onClick = {
+                                                if (controlsEnabled) {
+                                                    viewModel.setCaptureFormat(format)
+                                                    lastSurface?.let { viewModel.startPreview(context, it) }
+                                                }
+                                            },
+                                            enabled = controlsEnabled,
+                                            label = { Text(name) },
+                                            modifier = Modifier.padding(horizontal = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Compare with reference",
+                                    color = Color.White,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Switch(
+                                    checked = referenceComparisonEnabled,
+                                    enabled = controlsEnabled,
+                                    onCheckedChange = { if (controlsEnabled) viewModel.setReferenceComparisonEnabled(it) }
+                                )
+                            }
                         }
                     }
                 }
