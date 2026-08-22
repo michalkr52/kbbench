@@ -36,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kbbench.app.ui.components.CameraPreview
 import com.kbbench.app.viewmodel.AppScreen
 import com.kbbench.app.viewmodel.CameraViewModel
+import com.kbbench.algorithm.base.AlgorithmMetadata
 import kotlinx.coroutines.delay
 
 @Composable
@@ -324,7 +325,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
 
     if (showAlgorithmSelector) {
         AlgorithmSelectorDialog(
-            algorithmNames = viewModel.availableAlgorithmNames,
+            algorithms = viewModel.availableAlgorithms.map { it.metadata },
             enabledAlgorithmNames = enabledAlgorithmNames,
             onAlgorithmEnabledChanged = viewModel::setAlgorithmEnabled,
             onAllAlgorithmsEnabledChanged = viewModel::setAllAlgorithmsEnabled,
@@ -335,14 +336,14 @@ fun CameraScreen(viewModel: CameraViewModel) {
 
 @Composable
 private fun AlgorithmSelectorDialog(
-    algorithmNames: List<String>,
+    algorithms: List<AlgorithmMetadata>,
     enabledAlgorithmNames: Set<String>,
     onAlgorithmEnabledChanged: (String, Boolean) -> Unit,
     onAllAlgorithmsEnabledChanged: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val allEnabled = algorithmNames.isNotEmpty() &&
-        algorithmNames.all { it in enabledAlgorithmNames }
+    val allEnabled = algorithms.isNotEmpty() &&
+        algorithms.all { it.name in enabledAlgorithmNames }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -360,16 +361,26 @@ private fun AlgorithmSelectorDialog(
                     )
                 }
                 HorizontalDivider()
-                algorithmNames.forEach { name ->
+                algorithms.forEach { algorithm ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(name, modifier = Modifier.weight(1f))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = algorithm.name,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = algorithm.kind,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Checkbox(
-                            checked = name in enabledAlgorithmNames,
+                            checked = algorithm.name in enabledAlgorithmNames,
                             onCheckedChange = { enabled ->
-                                onAlgorithmEnabledChanged(name, enabled)
+                                onAlgorithmEnabledChanged(algorithm.name, enabled)
                             }
                         )
                     }

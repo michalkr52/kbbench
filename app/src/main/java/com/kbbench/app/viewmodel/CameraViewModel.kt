@@ -93,13 +93,13 @@ private data class AlgorithmOutputRecord(
 class CameraViewModel : ViewModel() {
 
     private val algorithmRegistry = AlgorithmRegistry()
-    val availableAlgorithmNames: List<String> = algorithmRegistry.getAll().map { it.name }
+    val availableAlgorithms: List<ImageAlgorithm> = algorithmRegistry.getAll()
 
-    private val _enabledAlgorithmNames = MutableStateFlow(availableAlgorithmNames.toSet())
+    private val _enabledAlgorithmNames = MutableStateFlow(availableAlgorithms.map { it.name }.toSet())
     val enabledAlgorithmNames = _enabledAlgorithmNames.asStateFlow()
 
     fun setAlgorithmEnabled(name: String, enabled: Boolean) {
-        if (name !in availableAlgorithmNames) return
+        if (name !in availableAlgorithms.map { it.name }) return
         _enabledAlgorithmNames.value = if (enabled) {
             _enabledAlgorithmNames.value + name
         } else {
@@ -108,11 +108,11 @@ class CameraViewModel : ViewModel() {
     }
 
     fun setAllAlgorithmsEnabled(enabled: Boolean) {
-        _enabledAlgorithmNames.value = if (enabled) availableAlgorithmNames.toSet() else emptySet()
+        _enabledAlgorithmNames.value = if (enabled) availableAlgorithms.map { it.name }.toSet() else emptySet()
     }
 
     private fun getEnabledAlgorithms(): List<ImageAlgorithm> =
-        algorithmRegistry.getAll().filter { it.name in _enabledAlgorithmNames.value }
+        availableAlgorithms.filter { it.name in _enabledAlgorithmNames.value }
 
     private val _currentScreen = MutableStateFlow(AppScreen.CAMERA)
     val currentScreen = _currentScreen.asStateFlow()

@@ -23,6 +23,7 @@ import kotlin.math.exp
 class ExposureFusion : ImageAlgorithm {
     override val metadata: AlgorithmMetadata = AlgorithmMetadata(
         name = "ExposureFusion",
+        kind = "HDR",
         category = AlgorithmCategory.HDR_FUSION,
         frameRequirements = FrameRequirements(
             minFrames = 2,

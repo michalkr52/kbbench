@@ -19,6 +19,7 @@ import com.kbbench.algorithm.base.measureMs
 class ContrastStretching : ImageAlgorithm {
     override val metadata: AlgorithmMetadata = AlgorithmMetadata(
         name = "ContrastStretching",
+        kind = "Contrast",
         category = AlgorithmCategory.CONTRAST_ENHANCEMENT,
         frameRequirements = FrameRequirements(
             minFrames = 1,
