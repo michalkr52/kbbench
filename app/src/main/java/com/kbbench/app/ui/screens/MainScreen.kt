@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,9 +54,11 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val captureFormat by viewModel.captureFormat.collectAsState()
     val zoomLevel by viewModel.zoomLevel.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
+    val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
+    var showAlgorithmSelector by remember { mutableStateOf(false) }
 
     val uploadInputLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -227,6 +230,21 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
+                                onClick = { showAlgorithmSelector = true },
+                                enabled = !isProcessing,
+                                modifier = Modifier
+                                    .padding(end = 24.dp)
+                                    .size(56.dp)
+                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Tune,
+                                    contentDescription = "Select algorithms",
+                                    tint = Color.White
+                                )
+                            }
+
+                            IconButton(
                                 onClick = {
                                     uploadInputLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -289,6 +307,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                                     )
                                 }
                             }
+
                         }
                     }
                 }
@@ -302,4 +321,65 @@ fun CameraScreen(viewModel: CameraViewModel) {
             }
         }
     }
+
+    if (showAlgorithmSelector) {
+        AlgorithmSelectorDialog(
+            algorithmNames = viewModel.availableAlgorithmNames,
+            enabledAlgorithmNames = enabledAlgorithmNames,
+            onAlgorithmEnabledChanged = viewModel::setAlgorithmEnabled,
+            onAllAlgorithmsEnabledChanged = viewModel::setAllAlgorithmsEnabled,
+            onDismiss = { showAlgorithmSelector = false }
+        )
+    }
+}
+
+@Composable
+private fun AlgorithmSelectorDialog(
+    algorithmNames: List<String>,
+    enabledAlgorithmNames: Set<String>,
+    onAlgorithmEnabledChanged: (String, Boolean) -> Unit,
+    onAllAlgorithmsEnabledChanged: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val allEnabled = algorithmNames.isNotEmpty() &&
+        algorithmNames.all { it in enabledAlgorithmNames }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Algorithms") },
+        text = {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("All algorithms", modifier = Modifier.weight(1f))
+                    Checkbox(
+                        checked = allEnabled,
+                        onCheckedChange = onAllAlgorithmsEnabledChanged
+                    )
+                }
+                HorizontalDivider()
+                algorithmNames.forEach { name ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(name, modifier = Modifier.weight(1f))
+                        Checkbox(
+                            checked = name in enabledAlgorithmNames,
+                            onCheckedChange = { enabled ->
+                                onAlgorithmEnabledChanged(name, enabled)
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Done")
+            }
+        }
+    )
 }

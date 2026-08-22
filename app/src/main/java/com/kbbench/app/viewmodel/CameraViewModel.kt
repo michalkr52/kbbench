@@ -92,8 +92,27 @@ private data class AlgorithmOutputRecord(
 
 class CameraViewModel : ViewModel() {
 
-    // TODO: Add algorithm selection UI; for now all registered algorithms are used
     private val algorithmRegistry = AlgorithmRegistry()
+    val availableAlgorithmNames: List<String> = algorithmRegistry.getAll().map { it.name }
+
+    private val _enabledAlgorithmNames = MutableStateFlow(availableAlgorithmNames.toSet())
+    val enabledAlgorithmNames = _enabledAlgorithmNames.asStateFlow()
+
+    fun setAlgorithmEnabled(name: String, enabled: Boolean) {
+        if (name !in availableAlgorithmNames) return
+        _enabledAlgorithmNames.value = if (enabled) {
+            _enabledAlgorithmNames.value + name
+        } else {
+            _enabledAlgorithmNames.value - name
+        }
+    }
+
+    fun setAllAlgorithmsEnabled(enabled: Boolean) {
+        _enabledAlgorithmNames.value = if (enabled) availableAlgorithmNames.toSet() else emptySet()
+    }
+
+    private fun getEnabledAlgorithms(): List<ImageAlgorithm> =
+        algorithmRegistry.getAll().filter { it.name in _enabledAlgorithmNames.value }
 
     private val _currentScreen = MutableStateFlow(AppScreen.CAMERA)
     val currentScreen = _currentScreen.asStateFlow()
@@ -334,7 +353,7 @@ class CameraViewModel : ViewModel() {
             _isProcessing.value = true
             try {
                 val isRaw = _captureFormat.value == ImageFormat.RAW_SENSOR
-                val algorithms = algorithmRegistry.getAll()
+                val algorithms = getEnabledAlgorithms()
                 val maxFramesNeeded = algorithms.maxOfOrNull { it.metadata.frameRequirements.minFrames } ?: 1
 
                 val request = sess.device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
@@ -675,7 +694,7 @@ class CameraViewModel : ViewModel() {
                 bitmap.recycle()
 
                 runBenchmarks(
-                    context, file, algorithmRegistry.getAll(), listOf(pixels), width, height,
+                    context, file, getEnabledAlgorithms(), listOf(pixels), width, height,
                     exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
                     originalRotation = 0, outputRotation = 0
                 )
