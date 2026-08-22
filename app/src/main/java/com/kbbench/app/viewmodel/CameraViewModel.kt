@@ -598,7 +598,7 @@ class CameraViewModel : ViewModel() {
         // Original image as baseline
         results.add(BenchmarkResult(
             id = "original",
-            title = "Original",
+            title = "Input Image",
             imagePath = originalFile.absolutePath,
             rotationDegrees = originalRotation
         ))
