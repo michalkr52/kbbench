@@ -595,7 +595,6 @@ class CameraViewModel : ViewModel() {
         val results = mutableListOf<BenchmarkResult>()
         val outputRecords = mutableListOf<AlgorithmOutputRecord>()
 
-        // Original image as baseline
         results.add(BenchmarkResult(
             id = "original",
             title = "Input Image",

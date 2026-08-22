@@ -20,8 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.FileUpload
-import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,6 +50,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var isSelectingForCompare by remember { mutableStateOf(false) }
     var compareSelection by remember { mutableStateOf(setOf<Int>()) }
     var compareIndices by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var isCompareVertical by remember { mutableStateOf(true) }
 
     val loadReferenceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -76,8 +76,8 @@ fun ResultScreen(viewModel: CameraViewModel) {
     }
 
     val displayTitle = when {
-        compareIndices != null -> "Compare"
-        isSelectingForCompare -> "Select 2 images"
+        compareIndices != null -> "Comparison"
+        isSelectingForCompare -> "Select two images"
         selectedIndex != null -> results[currentPage].title
         else -> "Benchmark Results"
     }
@@ -112,7 +112,14 @@ fun ResultScreen(viewModel: CameraViewModel) {
                     }
                 },
                 actions = {
-                    if (selectedIndex == null && !isSelectingForCompare && compareIndices == null) {
+                    if (compareIndices != null) {
+                        IconButton(onClick = { isCompareVertical = !isCompareVertical }) {
+                            Icon(
+                                imageVector = Icons.Default.Flip,
+                                contentDescription = if (isCompareVertical) "Switch to horizontal" else "Switch to vertical"
+                            )
+                        }
+                    } else if (selectedIndex == null && !isSelectingForCompare) {
                         IconButton(onClick = { viewModel.exportResults(context) }) {
                             Icon(Icons.Default.Share, contentDescription = "Export")
                         }
@@ -127,6 +134,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 CompareView(
                     resultA = results[a],
                     resultB = results[b],
+                    isVertical = isCompareVertical,
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -460,11 +468,16 @@ fun ResultFullscreenView(
 fun CompareView(
     resultA: BenchmarkResult,
     resultB: BenchmarkResult,
+    isVertical: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    var isVertical by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isVertical) {
+        scale = 1f
+        offset = Offset.Zero
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         val gestureModifier = Modifier
@@ -568,23 +581,6 @@ fun CompareView(
             }
         }
 
-        // Toggle button
-        IconButton(
-            onClick = {
-                isVertical = !isVertical
-                scale = 1f
-                offset = Offset.Zero
-            },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(8.dp)
-        ) {
-            Icon(
-                imageVector = if (isVertical) Icons.Default.MoreVert else Icons.Default.MoreHoriz,
-                contentDescription = if (isVertical) "Switch to horizontal" else "Switch to vertical",
-                tint = MaterialTheme.colorScheme.onSurface
-            )
-        }
     }
 }
 
