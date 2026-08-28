@@ -25,7 +25,6 @@ import com.kbbench.algorithm.base.*
 import com.kbbench.algorithm.impl.AlgorithmRegistry
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
-import com.kbbench.algorithm.preprocessing.WhiteBalance
 import com.kbbench.utils.RgbHistogram
 import com.kbbench.utils.calculateRgbHistogram
 import com.kbbench.utils.centerCropAndScale
@@ -552,13 +551,15 @@ class CameraViewModel : ViewModel() {
                 whiteLevel = whiteLevel,
                 blackLevel = blackLevel
             )
-            val pixels = BayerDemosaic.demosaic(raw, w, h, CfaPattern.fromId(cfaPattern))
-
-            // Apply white balance from capture AWB gains
+            // White balance gains are applied inside demosaic (float domain) to avoid
+            // re-quantizing already-8-bit values, which produced comb-like histogram spikes.
             val gains = frame.metadata.get(CaptureResult.COLOR_CORRECTION_GAINS)
-            if (gains != null) {
-                WhiteBalance.apply(pixels, gains.red, gains.greenEven, gains.blue)
-            }
+            val pixels = BayerDemosaic.demosaic(
+                raw, w, h, CfaPattern.fromId(cfaPattern),
+                rGain = gains?.red ?: 1f,
+                gGain = gains?.greenEven ?: 1f,
+                bGain = gains?.blue ?: 1f
+            )
 
             Triple(pixels, w, h)
         }

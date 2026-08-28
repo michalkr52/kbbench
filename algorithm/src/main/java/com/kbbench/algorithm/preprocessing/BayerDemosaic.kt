@@ -22,8 +22,21 @@ object BayerDemosaic {
 
     /**
      * Demosaics a RAW image represented as normalized floats (0..1) into ARGB_8888 pixels.
+     *
+     * White balance gains are applied in the float domain before the single 8-bit
+     * quantization below, so the result stays injective per input level. Applying gains
+     * to already-quantized 8-bit values instead would truncate twice and produce comb-like
+     * gaps/spikes per channel in the output histogram.
      */
-    fun demosaic(raw: FloatArray, width: Int, height: Int, pattern: CfaPattern): IntArray {
+    fun demosaic(
+        raw: FloatArray,
+        width: Int,
+        height: Int,
+        pattern: CfaPattern,
+        rGain: Float = 1f,
+        gGain: Float = 1f,
+        bGain: Float = 1f
+    ): IntArray {
         val rX: Int; val rY: Int
         val bX: Int; val bY: Int
         when (pattern) {
@@ -32,6 +45,8 @@ object BayerDemosaic {
             CfaPattern.GBRG -> { rX = 0; rY = 1; bX = 1; bY = 0 }
             CfaPattern.BGGR -> { rX = 1; rY = 1; bX = 0; bY = 0 }
         }
+        val normR = rGain / gGain
+        val normB = bGain / gGain
 
         val pixels = IntArray(width * height)
         for (y in 0 until height) {
@@ -63,9 +78,9 @@ object BayerDemosaic {
                     }
                 }
 
-                val ri = (r * 255f).toInt().coerceIn(0, 255)
-                val gi = (g * 255f).toInt().coerceIn(0, 255)
-                val bi = (b * 255f).toInt().coerceIn(0, 255)
+                val ri = ((r * normR).coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+                val gi = (g.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+                val bi = ((b * normB).coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
                 pixels[y * width + x] = (0xFF shl 24) or (ri shl 16) or (gi shl 8) or bi
             }
         }
