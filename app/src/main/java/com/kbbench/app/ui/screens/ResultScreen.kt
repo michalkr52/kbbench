@@ -287,10 +287,9 @@ fun ResultGridView(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                         ) {
-                            Text(
-                                text = result.title,
-                                modifier = Modifier.padding(4.dp),
-                                style = MaterialTheme.typography.labelSmall
+                            ResultLabel(
+                                result = result,
+                                modifier = Modifier.padding(4.dp)
                             )
                         }
                     }
@@ -487,6 +486,13 @@ fun ResultFullscreenView(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Metrics", style = MaterialTheme.typography.titleMedium)
+                    currentResult.inputFrameDescription()?.let { description ->
+                        Text(
+                            text = description,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                     displayMetrics.forEach { (key, value) ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -498,6 +504,50 @@ fun ResultFullscreenView(
                     }
                 }
             }
+        }
+    }
+}
+
+private fun BenchmarkResult.inputFrameDescription(): String? {
+    if (inputFrameIndices.isEmpty()) return null
+    val frames = inputFrameIndices.joinToString(", ") { (it + 1).toString() }
+    return "Input frames: $frames"
+}
+
+@Composable
+private fun ResultLabel(
+    result: BenchmarkResult,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        if (result.preprocessedFrameIndex != null && result.preprocessedFrameCount != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = result.title,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    text = "${result.preprocessedFrameIndex + 1}/${result.preprocessedFrameCount}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        } else {
+            Text(
+                text = result.title,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        result.inputFrameDescription()?.let { description ->
+            Text(
+                text = description,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
@@ -684,10 +734,9 @@ private fun CompareImageBox(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Text(
-                text = result.title,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                style = MaterialTheme.typography.labelSmall
+            ResultLabel(
+                result = result,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
             )
         }
     }

@@ -289,7 +289,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Capture Format",
+                                text = "Capture format",
                                 color = Color.White,
                                 modifier = Modifier.weight(1f)
                             )

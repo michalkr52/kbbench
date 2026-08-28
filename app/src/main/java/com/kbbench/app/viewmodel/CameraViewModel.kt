@@ -81,6 +81,9 @@ data class BenchmarkResult(
     val title: String,
     val imagePath: String,
     val displayRotationDegrees: Int = 0,
+    val preprocessedFrameIndex: Int? = null,
+    val preprocessedFrameCount: Int? = null,
+    val inputFrameIndices: List<Int> = emptyList(),
     val metrics: BenchmarkMetrics = BenchmarkMetrics()
 )
 
@@ -742,13 +745,17 @@ class CameraViewModel : ViewModel() {
             )
         )
         if (preprocessedFiles.isNotEmpty()) {
-            results.add(
-                BenchmarkResult(
-                    id = "preprocessed",
-                    title = "Pre-processed Input",
-                    imagePath = preprocessedFiles.first().absolutePath
+            preprocessedFiles.forEachIndexed { index, preprocessedFile ->
+                results.add(
+                    BenchmarkResult(
+                        id = "preprocessed_$index",
+                        title = "Pre-processed Input",
+                        imagePath = preprocessedFile.absolutePath,
+                        preprocessedFrameIndex = index,
+                        preprocessedFrameCount = preprocessedFiles.size,
+                    )
                 )
-            )
+            }
         }
 
         for (algo in algorithms) {
@@ -764,6 +771,11 @@ class CameraViewModel : ViewModel() {
             } else {
                 val max = algo.metadata.frameRequirements.maxFrames ?: frames.size
                 frames.take(max)
+            }
+            val inputFrameIndices = if (inputFrames.size == 1) {
+                listOf(0)
+            } else {
+                inputFrames.indices.toList()
             }
 
             val input = AlgorithmInput(
@@ -800,6 +812,7 @@ class CameraViewModel : ViewModel() {
                     id = id,
                     title = algo.name,
                     imagePath = outFile.absolutePath,
+                    inputFrameIndices = inputFrameIndices,
                     metrics = BenchmarkMetrics(runtimeMs = output.totalTime)
                 ))
             } catch (e: Exception) {
@@ -809,6 +822,7 @@ class CameraViewModel : ViewModel() {
                     title = "${algo.name} (failed)",
                     imagePath = originalFile.absolutePath,
                     displayRotationDegrees = originalDisplayRotation,
+                    inputFrameIndices = inputFrameIndices,
                     metrics = BenchmarkMetrics(extra = mapOf("Error" to (e.message ?: "Unknown")))
                 ))
             }
@@ -967,14 +981,8 @@ class CameraViewModel : ViewModel() {
             .toMutableList()
 
         if (reference != null) {
-            val preprocessedIndex = updated.indexOfFirst { it.id == "preprocessed" }
-            val insertIndex = if (preprocessedIndex >= 0) {
-                preprocessedIndex + 1
-            } else if (updated.isNotEmpty()) {
-                1
-            } else {
-                0
-            }
+            val preprocessedIndex = updated.indexOfLast { it.id.startsWith("preprocessed_") }
+            val insertIndex = if (preprocessedIndex >= 0) preprocessedIndex + 1 else 1
             updated.add(
                 insertIndex.coerceAtMost(updated.size),
                 BenchmarkResult(id = "reference", title = "Reference", imagePath = reference.displayPath)
@@ -1111,6 +1119,9 @@ class CameraViewModel : ViewModel() {
             metrics.ssim?.let { entry.put("ssim", it) }
             if (metrics.extra.isNotEmpty()) {
                 entry.put("extra", JSONObject(metrics.extra))
+            }
+            if (result.inputFrameIndices.isNotEmpty()) {
+                entry.put("input_frames", JSONArray(result.inputFrameIndices))
             }
             resultEntries.put(entry)
         }
