@@ -521,21 +521,15 @@ private fun ResultLabel(
 ) {
     Column(modifier = modifier) {
         if (result.preprocessedFrameIndex != null && result.preprocessedFrameCount != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = result.title,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelSmall
-                )
-                Text(
-                    text = "${result.preprocessedFrameIndex + 1}/${result.preprocessedFrameCount}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
+            Text(
+                text = result.title,
+                style = MaterialTheme.typography.labelSmall
+            )
+            Text(
+                text = "Frame ${result.preprocessedFrameIndex + 1} of ${result.preprocessedFrameCount}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.labelSmall
+            )
         } else {
             Text(
                 text = result.title,
@@ -655,7 +649,7 @@ fun CompareView(
                     offset = offset,
                     histogram = histograms[resultA.imagePath],
                     showHistogram = showHistograms,
-                    histogramBottomPadding = 28.dp,
+                    histogramBottomPadding = 44.dp,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
                 CompareImageBox(
@@ -664,7 +658,7 @@ fun CompareView(
                     offset = offset,
                     histogram = histograms[resultB.imagePath],
                     showHistogram = showHistograms,
-                    histogramBottomPadding = 28.dp,
+                    histogramBottomPadding = 44.dp,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
             }
