@@ -64,7 +64,6 @@ data class BenchmarkMetrics(
     val runtimeMs: Long? = null,
     val psnr: Double? = null,
     val ssim: Double? = null,
-    val extra: Map<String, String> = emptyMap()
 ) {
     /**
      * Converts metrics into a display-friendly list of key-value pairs.
@@ -74,7 +73,6 @@ data class BenchmarkMetrics(
         runtimeMs?.let { list.add("Runtime" to "${it}ms") }
         psnr?.let { list.add("PSNR" to "%.2f dB".format(Locale.US, it)) }
         ssim?.let { list.add("SSIM" to "%.4f".format(Locale.US, it)) }
-        extra.forEach { (k, v) -> list.add(k to v) }
         return list
     }
 }
@@ -117,6 +115,7 @@ private data class CaptureMetadata(
 )
 
 private data class ExportImageArtifact(
+    val id: String,
     val path: String,
     val role: String,
     val width: Int,
@@ -748,6 +747,7 @@ class CameraViewModel : ViewModel() {
             )
             artifacts.add(
                 ExportImageArtifact(
+                    id = "image_preprocessed_$index",
                     path = preprocessedFile.absolutePath,
                     role = "preprocessed_input",
                     width = width,
@@ -764,6 +764,7 @@ class CameraViewModel : ViewModel() {
 
         artifacts.add(
             ExportImageArtifact(
+                id = "image_original",
                 path = originalFile.absolutePath,
                 role = "original_capture",
                 width = width,
@@ -835,6 +836,7 @@ class CameraViewModel : ViewModel() {
                 val outFile = File(context.filesDir, "OUT_${algo.name}_${sdf.format(Date())}.png")
                 artifacts.add(
                     ExportImageArtifact(
+                        id = "image_output_$id",
                         path = outFile.absolutePath,
                         role = "algorithm_output",
                         width = output.width,
@@ -859,7 +861,7 @@ class CameraViewModel : ViewModel() {
                     imagePath = originalFile.absolutePath,
                     displayRotationDegrees = originalDisplayRotation,
                     inputFrameIndices = inputFrameIndices,
-                    metrics = BenchmarkMetrics(extra = mapOf("Error" to (e.message ?: "Unknown")))
+                    metrics = BenchmarkMetrics()
                 ))
             }
         }
@@ -974,6 +976,7 @@ class CameraViewModel : ViewModel() {
                 _referenceImage.value = ReferenceImage(bitmap, persistedImage.file.absolutePath)
                 exportImageArtifacts = exportImageArtifacts.filterNot { it.role == "reference_image" } +
                     ExportImageArtifact(
+                        id = "image_reference",
                         path = persistedImage.file.absolutePath,
                         role = "reference_image",
                         width = bitmap.width,
@@ -1096,7 +1099,9 @@ class CameraViewModel : ViewModel() {
     fun exportResults(context: Context) {
         val results = _benchmarkResults.value
         if (results.isEmpty()) return
-        val artifacts = exportImageArtifacts.distinctBy { it.path }
+        val artifacts = exportImageArtifacts
+            .distinctBy { it.path }
+            .filter { File(it.path).exists() }
 
         viewModelScope.launch(Dispatchers.IO) {
             val manifestFile = File(context.cacheDir, "benchmark_results.json")
@@ -1108,9 +1113,7 @@ class CameraViewModel : ViewModel() {
 
             artifacts.forEach { artifact ->
                 val imageFile = File(artifact.path)
-                if (imageFile.exists()) {
-                    uris.add(FileProvider.getUriForFile(context, authority, imageFile))
-                }
+                uris.add(FileProvider.getUriForFile(context, authority, imageFile))
             }
 
             withContext(Dispatchers.Main) {
@@ -1130,11 +1133,10 @@ class CameraViewModel : ViewModel() {
     ): String {
         val manifest = JSONObject()
             .put(
-                "algorithm_input",
+                "preprocessing",
                 JSONObject()
                     .put("pixel_format", "ARGB_8888")
                     .put("channel_order", "ARGB")
-                    .put("brightness_range", "0-255")
             )
             .put(
                 "capture",
@@ -1153,14 +1155,13 @@ class CameraViewModel : ViewModel() {
         captureMetadata.cfaPattern?.let { capture.put("raw_cfa_pattern", it) }
         captureMetadata.whiteBalanceGains?.let { capture.put("white_balance_gains", JSONArray(it)) }
 
+        val imageByPath = artifacts.associateBy { it.path }
         val imageEntries = JSONArray()
         artifacts.forEach { artifact ->
-            val file = File(artifact.path)
-            if (!file.exists()) return@forEach
-
             val entry = JSONObject()
+                .put("id", artifact.id)
                 .put("role", artifact.role)
-                .put("file", file.name)
+                .put("file", File(artifact.path).name)
                 .put("width", artifact.width)
                 .put("height", artifact.height)
             artifact.frameIndex?.let { entry.put("frame_index", it) }
@@ -1170,19 +1171,30 @@ class CameraViewModel : ViewModel() {
 
         val resultEntries = JSONArray()
         results.forEach { result ->
+            val image = imageByPath[result.imagePath] ?: return@forEach
+            val kind = when {
+                result.id == "original" -> "original_capture"
+                result.id.startsWith("preprocessed_") -> "preprocessed_input"
+                result.id == "reference" -> "reference_image"
+                else -> "algorithm"
+            }
             val metrics = result.metrics
             val entry = JSONObject()
                 .put("id", result.id)
+                .put("kind", kind)
                 .put("title", result.title)
-                .put("image", File(result.imagePath).name)
-            metrics.runtimeMs?.let { entry.put("runtime_ms", it) }
-            metrics.psnr?.let { entry.put("psnr_db", it) }
-            metrics.ssim?.let { entry.put("ssim", it) }
-            if (metrics.extra.isNotEmpty()) {
-                entry.put("extra", JSONObject(metrics.extra))
-            }
-            if (result.inputFrameIndices.isNotEmpty()) {
-                entry.put("input_frames", JSONArray(result.inputFrameIndices))
+                .put("image_id", image.id)
+            if (kind == "algorithm") {
+                entry.put("input_frame_indices", JSONArray(result.inputFrameIndices))
+                entry.put(
+                    "metrics",
+                    JSONObject()
+                        .put("runtime_ms", metrics.runtimeMs ?: JSONObject.NULL)
+                        .put("psnr_db", metrics.psnr ?: JSONObject.NULL)
+                        .put("ssim", metrics.ssim ?: JSONObject.NULL)
+                )
+            } else if (kind == "preprocessed_input") {
+                result.preprocessedFrameIndex?.let { entry.put("frame_index", it) }
             }
             resultEntries.put(entry)
         }
