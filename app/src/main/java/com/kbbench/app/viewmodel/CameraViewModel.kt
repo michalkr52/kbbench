@@ -30,7 +30,11 @@ import com.kbbench.utils.calculateRgbHistogram
 import com.kbbench.utils.centerCropAndScale
 import com.kbbench.utils.getPreviewOutputSize
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
@@ -126,6 +130,22 @@ private data class PersistedPickedImage(
 )
 
 class CameraViewModel : ViewModel() {
+
+    /** Temporary profiling helper: logs wall-clock time of [block] under the "Perf" tag. */
+    private inline fun <T> logTimed(label: String, block: () -> T): T {
+        val start = System.currentTimeMillis()
+        val result = block()
+        Log.d("Perf", "$label: ${System.currentTimeMillis() - start} ms")
+        return result
+    }
+
+    /** Suspend variant of [logTimed] for blocks that call suspend functions. */
+    private suspend inline fun <T> logTimedSuspend(label: String, crossinline block: suspend () -> T): T {
+        val start = System.currentTimeMillis()
+        val result = block()
+        Log.d("Perf", "$label: ${System.currentTimeMillis() - start} ms")
+        return result
+    }
 
     private val algorithmRegistry = AlgorithmRegistry()
     val availableAlgorithms: List<ImageAlgorithm> = algorithmRegistry.getAll()
@@ -439,10 +459,11 @@ class CameraViewModel : ViewModel() {
                     captureFrames(sess, reader, request, maxFramesNeeded)
                 }
                 val captureTimeMs = System.currentTimeMillis() - captureStartMs
+                Log.d("Perf", "camera capture x${capturedFrames.size}: $captureTimeMs ms")
 
                 // Save first frame as the original reference
                 val firstResult = capturedFrames.first()
-                val file = saveResult(context, firstResult, chars)
+                val file = logTimed("saveResult (original)") { saveResult(context, firstResult, chars) }
 
                 // Fix orientation for JPEG
                 if (!isRaw) {
@@ -471,9 +492,13 @@ class CameraViewModel : ViewModel() {
 
                 // Convert captured frames to display-oriented ARGB pixels for algorithms
                 val rotation = computeRelativeRotation(chars)
-                val decodedFrames = capturedFrames.map { frame -> decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern) }
-                val framePixels = decodedFrames.map { (pixels, frameWidth, frameHeight) ->
-                    rotateArgb(pixels, frameWidth, frameHeight, rotation)
+                val decodedFrames = logTimed("decodeToArgb x${capturedFrames.size}") {
+                    capturedFrames.map { frame -> decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern) }
+                }
+                val framePixels = logTimed("rotateArgb x${decodedFrames.size}") {
+                    decodedFrames.map { (pixels, frameWidth, frameHeight) ->
+                        rotateArgb(pixels, frameWidth, frameHeight, rotation)
+                    }
                 }
                 val width = framePixels.first().second
                 val height = framePixels.first().third
@@ -491,23 +516,25 @@ class CameraViewModel : ViewModel() {
                 capturedFrames.forEach { it.image.close() }
 
                 // Run algorithms and build results
-                runBenchmarks(context, file, algorithms, pixelArrays, width, height,
-                    exposureTimes, isoValues, captureTimeMs, if (isRaw) rotation else 0,
-                    CaptureMetadata(
-                        sourceFormat = if (isRaw) "RAW_SENSOR" else "JPEG",
-                        width = width,
-                        height = height,
-                        exposureTimesMs = exposureTimes.map { it / 1_000_000.0 },
-                        isoValues = isoValues,
-                        captureTimeMs = captureTimeMs,
-                        rawWhiteLevel = if (isRaw) whiteLevel else null,
-                        rawBlackLevel = if (isRaw) blackLevel else null,
-                        cfaPattern = if (isRaw) cfaPattern else null,
-                        whiteBalanceGains = capturedFrames.first().metadata
-                            .get(CaptureResult.COLOR_CORRECTION_GAINS)
-                            ?.let { listOf(it.red, it.greenEven, it.blue) }
-                    ))
-                recomputeMetricsWithReference()
+                logTimedSuspend("runBenchmarks") {
+                    runBenchmarks(context, file, algorithms, pixelArrays, width, height,
+                        exposureTimes, isoValues, captureTimeMs, if (isRaw) rotation else 0,
+                        CaptureMetadata(
+                            sourceFormat = if (isRaw) "RAW_SENSOR" else "JPEG",
+                            width = width,
+                            height = height,
+                            exposureTimesMs = exposureTimes.map { it / 1_000_000.0 },
+                            isoValues = isoValues,
+                            captureTimeMs = captureTimeMs,
+                            rawWhiteLevel = if (isRaw) whiteLevel else null,
+                            rawBlackLevel = if (isRaw) blackLevel else null,
+                            cfaPattern = if (isRaw) cfaPattern else null,
+                            whiteBalanceGains = capturedFrames.first().metadata
+                                .get(CaptureResult.COLOR_CORRECTION_GAINS)
+                                ?.let { listOf(it.red, it.greenEven, it.blue) }
+                        ))
+                }
+                logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
 
                 _currentScreen.value = AppScreen.RESULTS
                 closeCamera()
@@ -691,7 +718,7 @@ class CameraViewModel : ViewModel() {
         }, cameraHandler)
     }
 
-    private fun runBenchmarks(
+    private suspend fun runBenchmarks(
         context: Context,
         originalFile: File,
         algorithms: List<ImageAlgorithm>,
@@ -703,20 +730,22 @@ class CameraViewModel : ViewModel() {
         captureTimeMs: Long,
         originalDisplayRotation: Int,
         captureMetadata: CaptureMetadata
-    ) {
+    ) = coroutineScope {
         Log.d("CameraViewModel", "Running ${algorithms.size} algorithms on ${frames.size} frame(s)")
 
         val results = mutableListOf<BenchmarkResult>()
         val outputRecords = mutableListOf<AlgorithmOutputRecord>()
         val artifacts = mutableListOf<ExportImageArtifact>()
         val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
+        // PNG encoding is CPU-bound; defer all of it until every algo.process() call below has
+        // finished so encoding never runs concurrently with (and skews) a benchmarked algorithm.
+        val saveJobs = mutableListOf<Deferred<Unit>>()
 
         val preprocessedFiles = frames.mapIndexed { index, pixels ->
             val preprocessedFile = File(
                 context.filesDir,
                 "PREPROCESSED_${timestamp}_$index.png"
             )
-            saveArgbPng(preprocessedFile, pixels, width, height)
             artifacts.add(
                 ExportImageArtifact(
                     path = preprocessedFile.absolutePath,
@@ -729,7 +758,7 @@ class CameraViewModel : ViewModel() {
             preprocessedFile
         }
 
-        this.captureMetadata = captureMetadata
+        this@CameraViewModel.captureMetadata = captureMetadata
 
         val isRawSource = captureMetadata.sourceFormat == "RAW_SENSOR"
 
@@ -765,6 +794,8 @@ class CameraViewModel : ViewModel() {
             )
         )
 
+        val pendingOutputSaves = mutableListOf<Triple<String, File, AlgorithmOutput>>()
+
         for (algo in algorithms) {
             val minFrames = algo.metadata.frameRequirements.minFrames
             if (frames.size < minFrames) {
@@ -795,24 +826,22 @@ class CameraViewModel : ViewModel() {
             )
 
             try {
-                val output = algo.process(input)
+                val output = logTimed("algo.process(${algo.name})") { algo.process(input) }
                 val id = algo.name.lowercase(Locale.US)
 
-                // Save output pixels as PNG (physically rotated for correct display)
+                // File path/artifact are known synchronously; the actual PNG encode is deferred
+                // until after the algorithm loop below so it never contends with process() timing.
                 val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
                 val outFile = File(context.filesDir, "OUT_${algo.name}_${sdf.format(Date())}.png")
-                var bitmap = Bitmap.createBitmap(output.width, output.height, Bitmap.Config.ARGB_8888)
-                bitmap.setPixels(output.pixels, 0, output.width, 0, 0, output.width, output.height)
-                FileOutputStream(outFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
                 artifacts.add(
                     ExportImageArtifact(
                         path = outFile.absolutePath,
                         role = "algorithm_output",
-                        width = bitmap.width,
-                        height = bitmap.height,
+                        width = output.width,
+                        height = output.height,
                     )
                 )
-                bitmap.recycle()
+                pendingOutputSaves.add(Triple(algo.name, outFile, output))
 
                 outputRecords.add(AlgorithmOutputRecord(id, output.pixels, output.width, output.height, output.totalTime))
                 results.add(BenchmarkResult(
@@ -834,6 +863,27 @@ class CameraViewModel : ViewModel() {
                 ))
             }
         }
+
+        // All algo.process() calls are done now; encode/write every PNG concurrently.
+        preprocessedFiles.forEachIndexed { index, preprocessedFile ->
+            val pixels = frames[index]
+            saveJobs += async(Dispatchers.Default) {
+                logTimed("saveArgbPng preprocessed[$index] (${width}x$height)") {
+                    saveArgbPng(preprocessedFile, pixels, width, height)
+                }
+            }
+        }
+        pendingOutputSaves.forEach { (algoName, outFile, output) ->
+            saveJobs += async(Dispatchers.Default) {
+                val bitmap = Bitmap.createBitmap(output.width, output.height, Bitmap.Config.ARGB_8888)
+                bitmap.setPixels(output.pixels, 0, output.width, 0, 0, output.width, output.height)
+                logTimed("PNG save output($algoName) (${output.width}x${output.height})") {
+                    FileOutputStream(outFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                }
+                bitmap.recycle()
+            }
+        }
+        logTimedSuspend("await PNG save jobs x${saveJobs.size}") { saveJobs.awaitAll() }
 
         lastAlgorithmOutputs = outputRecords
         exportImageArtifacts = artifacts
@@ -867,8 +917,8 @@ class CameraViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             _isProcessing.value = true
             try {
-                val persistedImage = persistPickedImage(context, uri, "IMG") ?: return@launch
-                val bitmap = BitmapFactory.decodeFile(persistedImage.file.absolutePath)
+                val persistedImage = logTimed("persistPickedImage") { persistPickedImage(context, uri, "IMG") } ?: return@launch
+                val bitmap = logTimed("decodeFile picked image") { BitmapFactory.decodeFile(persistedImage.file.absolutePath) }
                     ?: run {
                         persistedImage.file.delete()
                         return@launch
@@ -882,20 +932,22 @@ class CameraViewModel : ViewModel() {
                     bitmap.recycle()
                 }
 
-                runBenchmarks(
-                    context, persistedImage.file, getEnabledAlgorithms(), listOf(pixels), width, height,
-                    exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
-                    originalDisplayRotation = 0,
-                    captureMetadata = CaptureMetadata(
-                        sourceFormat = persistedImage.sourceFormat,
-                        width = width,
-                        height = height,
-                        exposureTimesMs = listOf(0.0),
-                        isoValues = listOf(100),
-                        captureTimeMs = 0L,
+                logTimedSuspend("runBenchmarks") {
+                    runBenchmarks(
+                        context, persistedImage.file, getEnabledAlgorithms(), listOf(pixels), width, height,
+                        exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
+                        originalDisplayRotation = 0,
+                        captureMetadata = CaptureMetadata(
+                            sourceFormat = persistedImage.sourceFormat,
+                            width = width,
+                            height = height,
+                            exposureTimesMs = listOf(0.0),
+                            isoValues = listOf(100),
+                            captureTimeMs = 0L,
+                        )
                     )
-                )
-                recomputeMetricsWithReference()
+                }
+                logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
 
                 _currentScreen.value = AppScreen.RESULTS
                 closeCamera()
@@ -1008,17 +1060,19 @@ class CameraViewModel : ViewModel() {
         _histograms.value = _histograms.value.filterKeys { it in paths }
 
         histogramJob = viewModelScope.launch(Dispatchers.IO) {
-            val calculated = paths.mapNotNull { path ->
-                val bitmap = BitmapFactory.decodeFile(path) ?: return@mapNotNull null
-                val histogram = try {
-                    calculateRgbHistogram(bitmap)
-                } catch (_: Exception) {
-                    null
-                } finally {
-                    bitmap.recycle()
-                }
-                histogram?.let { path to it }
-            }.toMap()
+            val calculated = logTimed("refreshHistograms decode+calc x${paths.size}") {
+                paths.mapNotNull { path ->
+                    val bitmap = BitmapFactory.decodeFile(path) ?: return@mapNotNull null
+                    val histogram = try {
+                        calculateRgbHistogram(bitmap)
+                    } catch (_: Exception) {
+                        null
+                    } finally {
+                        bitmap.recycle()
+                    }
+                    histogram?.let { path to it }
+                }.toMap()
+            }
 
             if (isActive && generation == histogramGeneration) {
                 _histograms.value = calculated
@@ -1026,17 +1080,17 @@ class CameraViewModel : ViewModel() {
         }
     }
 
-    private fun metricsFor(runtimeMs: Long, pixels: IntArray, width: Int, height: Int): BenchmarkMetrics {
-        val reference = _referenceImage.value ?: return BenchmarkMetrics(runtimeMs = runtimeMs)
-        val referenceBitmap = BitmapFactory.decodeFile(reference.displayPath)
-            ?: return BenchmarkMetrics(runtimeMs = runtimeMs)
-        val aligned = centerCropAndScale(referenceBitmap, width, height)
+    private fun metricsFor(runtimeMs: Long, pixels: IntArray, width: Int, height: Int): BenchmarkMetrics = logTimed("metricsFor (${width}x$height)") {
+        val reference = _referenceImage.value ?: return@logTimed BenchmarkMetrics(runtimeMs = runtimeMs)
+        val referenceBitmap = logTimed("  decode reference") { BitmapFactory.decodeFile(reference.displayPath) }
+            ?: return@logTimed BenchmarkMetrics(runtimeMs = runtimeMs)
+        val aligned = logTimed("  centerCropAndScale") { centerCropAndScale(referenceBitmap, width, height) }
         referenceBitmap.recycle()
         val refPixels = IntArray(width * height)
         aligned.getPixels(refPixels, 0, width, 0, 0, width, height)
         aligned.recycle()
-        val quality = calculateQualityMetrics(referencePixels = refPixels, candidatePixels = pixels)
-        return BenchmarkMetrics(runtimeMs = runtimeMs, psnr = quality.psnr, ssim = quality.ssim)
+        val quality = logTimed("  calculateQualityMetrics") { calculateQualityMetrics(referencePixels = refPixels, candidatePixels = pixels) }
+        BenchmarkMetrics(runtimeMs = runtimeMs, psnr = quality.psnr, ssim = quality.ssim)
     }
 
     fun exportResults(context: Context) {

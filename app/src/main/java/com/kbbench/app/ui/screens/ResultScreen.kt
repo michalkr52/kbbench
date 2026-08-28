@@ -32,7 +32,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -419,19 +421,19 @@ fun ResultFullscreenView(
                             }
                         }
                 ) {
-                    AsyncImage(
+                    RotationCompensatedAsyncImage(
                         model = result.imagePath,
                         contentDescription = result.title,
+                        rotationDegrees = result.displayRotationDegrees,
+                        contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer {
-                                rotationZ = result.displayRotationDegrees.toFloat()
                                 scaleX = scale
                                 scaleY = scale
                                 translationX = offset.x
                                 translationY = offset.y
-                            },
-                        contentScale = ContentScale.Fit
+                            }
                     )
 
                     if (showHistograms) {
@@ -512,6 +514,51 @@ private fun BenchmarkResult.inputFrameDescription(): String? {
     if (inputFrameIndices.isEmpty()) return null
     val frames = inputFrameIndices.joinToString(", ") { (it + 1).toString() }
     return "Input frames: $frames"
+}
+
+/**
+ * AsyncImage wrapper that accounts for a display rotation of 90/270 degrees when applying
+ * [contentScale]. A plain rotationZ transform rotates the already-scaled image in place, which
+ * leaves letterboxing when the un-rotated bitmap's aspect ratio doesn't match the container.
+ * Here the child is measured against swapped constraints so Fit/Crop scale against the bitmap's
+ * post-rotation footprint, then the result is rotated back into the container's orientation.
+ */
+@Composable
+private fun RotationCompensatedAsyncImage(
+    model: Any?,
+    contentDescription: String?,
+    rotationDegrees: Int,
+    contentScale: ContentScale,
+    modifier: Modifier = Modifier
+) {
+    val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+    val swapDimensions = normalizedRotation == 90 || normalizedRotation == 270
+    Layout(
+        content = {
+            AsyncImage(
+                model = model,
+                contentDescription = contentDescription,
+                contentScale = contentScale,
+                modifier = Modifier.fillMaxSize()
+            )
+        },
+        modifier = modifier
+    ) { measurables, constraints ->
+        val childConstraints = if (swapDimensions) {
+            Constraints.fixed(constraints.maxHeight, constraints.maxWidth)
+        } else {
+            Constraints.fixed(constraints.maxWidth, constraints.maxHeight)
+        }
+        val placeable = measurables.first().measure(childConstraints)
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeable.placeWithLayer(
+                x = (constraints.maxWidth - placeable.width) / 2,
+                y = (constraints.maxHeight - placeable.height) / 2
+            ) {
+                rotationZ = normalizedRotation.toFloat()
+            }
+        }
+    }
 }
 
 @Composable
@@ -707,19 +754,19 @@ private fun CompareImageBox(
     Box(
         modifier = modifier.clipToBounds()
     ) {
-        AsyncImage(
+        RotationCompensatedAsyncImage(
             model = result.imagePath,
             contentDescription = result.title,
+            rotationDegrees = result.displayRotationDegrees,
+            contentScale = ContentScale.Fit,
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    rotationZ = result.displayRotationDegrees.toFloat()
                     scaleX = scale
                     scaleY = scale
                     translationX = offset.x
                     translationY = offset.y
-                },
-            contentScale = ContentScale.Fit
+                }
         )
         if (showHistogram) {
             histogram?.let {
