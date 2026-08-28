@@ -198,6 +198,14 @@ fun CameraScreen(viewModel: CameraViewModel) {
                         modifier = Modifier.matchParentSize(),
                         contentAlignment = Alignment.Center
                     ) {
+                        if (isProcessing) {
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .background(MaterialTheme.colorScheme.background.copy(alpha=0.5f))
+                            )
+                        }
+
                         androidx.compose.animation.AnimatedVisibility(
                             visible = isProcessing,
                             enter = fadeIn(),
@@ -281,7 +289,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Format",
+                                text = "Capture Format",
                                 color = Color.White,
                                 modifier = Modifier.weight(1f)
                             )

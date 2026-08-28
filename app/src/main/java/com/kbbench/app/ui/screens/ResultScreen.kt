@@ -33,10 +33,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kbbench.app.viewmodel.BenchmarkResult
 import com.kbbench.app.viewmodel.CameraViewModel
+import com.kbbench.app.ui.components.HistogramOverlay
+import com.kbbench.app.ui.components.HistogramToolbar
+import com.kbbench.utils.RgbHistogram
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +55,8 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var compareSelection by remember { mutableStateOf(setOf<Int>()) }
     var compareIndices by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var isCompareVertical by remember { mutableStateOf(true) }
+    var showHistograms by remember { mutableStateOf(false) }
+    val histograms by viewModel.histograms.collectAsState()
 
     val loadReferenceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -135,6 +141,9 @@ fun ResultScreen(viewModel: CameraViewModel) {
                     resultA = results[a],
                     resultB = results[b],
                     isVertical = isCompareVertical,
+                    histograms = histograms,
+                    showHistograms = showHistograms,
+                    onToggleHistograms = { showHistograms = !showHistograms },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -145,6 +154,9 @@ fun ResultScreen(viewModel: CameraViewModel) {
                     onPageChanged = { page -> currentPage = page },
                     referenceIndex = referenceIndex,
                     onCompareWithReference = { page -> compareIndices = Pair(referenceIndex, page) },
+                    histograms = histograms,
+                    showHistograms = showHistograms,
+                    onToggleHistograms = { showHistograms = !showHistograms },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -259,7 +271,9 @@ fun ResultGridView(
                             contentDescription = result.title,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .graphicsLayer { rotationZ = result.rotationDegrees.toFloat() },
+                                .graphicsLayer {
+                                    rotationZ = result.displayRotationDegrees.toFloat()
+                                },
                             contentScale = ContentScale.Crop
                         )
                         if (isSelectingForCompare) {
@@ -320,6 +334,9 @@ fun ResultFullscreenView(
     onPageChanged: (Int) -> Unit,
     referenceIndex: Int = -1,
     onCompareWithReference: (Int) -> Unit = {},
+    histograms: Map<String, RgbHistogram> = emptyMap(),
+    showHistograms: Boolean = false,
+    onToggleHistograms: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val pagerState = rememberPagerState(initialPage = initialIndex, pageCount = { results.size })
@@ -330,112 +347,133 @@ fun ResultFullscreenView(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.weight(1f),
-            userScrollEnabled = isPagerScrollEnabled
-        ) { page ->
-            val result = results[page]
-            var scale by remember { mutableFloatStateOf(1f) }
-            var offset by remember { mutableStateOf(Offset.Zero) }
+        Box(modifier = Modifier.weight(1f)) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = isPagerScrollEnabled
+            ) { page ->
+                val result = results[page]
+                var scale by remember { mutableFloatStateOf(1f) }
+                var offset by remember { mutableStateOf(Offset.Zero) }
 
-            LaunchedEffect(scale) {
-                isPagerScrollEnabled = scale <= 1.01f
-            }
+                LaunchedEffect(scale) {
+                    isPagerScrollEnabled = scale <= 1.01f
+                }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clipToBounds()
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onDoubleTap = {
-                                if (scale > 1f) {
-                                    scale = 1f
-                                    offset = Offset.Zero
-                                    isPagerScrollEnabled = true
-                                } else {
-                                    scale = 3f
-                                    isPagerScrollEnabled = false
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    if (scale > 1f) {
+                                        scale = 1f
+                                        offset = Offset.Zero
+                                        isPagerScrollEnabled = true
+                                    } else {
+                                        scale = 3f
+                                        isPagerScrollEnabled = false
+                                    }
                                 }
-                            }
-                        )
-                    }
-                    .pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            do {
-                                val event = awaitPointerEvent()
-                                val changes = event.changes
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val changes = event.changes
 
-                                if (changes.size >= 2) {
-                                    // Pinch gesture: handle zoom + pan
-                                    val zoom = event.calculateZoom()
-                                    val pan = event.calculatePan()
-                                    val newScale = (scale * zoom).coerceIn(1f, 5f)
-                                    scale = newScale
+                                    if (changes.size >= 2) {
+                                        // Pinch gesture: handle zoom + pan
+                                        val zoom = event.calculateZoom()
+                                        val pan = event.calculatePan()
+                                        val newScale = (scale * zoom).coerceIn(1f, 5f)
+                                        scale = newScale
 
-                                    if (newScale > 1f) {
-                                        val maxX = size.width * (newScale - 1f) / 2f
-                                        val maxY = size.height * (newScale - 1f) / 2f
+                                        if (newScale > 1f) {
+                                            val maxX = size.width * (newScale - 1f) / 2f
+                                            val maxY = size.height * (newScale - 1f) / 2f
+                                            offset = Offset(
+                                                (offset.x + pan.x).coerceIn(-maxX, maxX),
+                                                (offset.y + pan.y).coerceIn(-maxY, maxY)
+                                            )
+                                        } else {
+                                            offset = Offset.Zero
+                                        }
+                                        changes.forEach { if (it.positionChanged()) it.consume() }
+                                    } else if (changes.size == 1 && scale > 1.01f) {
+                                        // Single finger pan when zoomed in
+                                        val pan = event.calculatePan()
+                                        val maxX = size.width * (scale - 1f) / 2f
+                                        val maxY = size.height * (scale - 1f) / 2f
                                         offset = Offset(
                                             (offset.x + pan.x).coerceIn(-maxX, maxX),
                                             (offset.y + pan.y).coerceIn(-maxY, maxY)
                                         )
-                                    } else {
-                                        offset = Offset.Zero
+                                        changes.forEach { if (it.positionChanged()) it.consume() }
                                     }
-                                    changes.forEach { if (it.positionChanged()) it.consume() }
-                                } else if (changes.size == 1 && scale > 1.01f) {
-                                    // Single finger pan when zoomed in
-                                    val pan = event.calculatePan()
-                                    val maxX = size.width * (scale - 1f) / 2f
-                                    val maxY = size.height * (scale - 1f) / 2f
-                                    offset = Offset(
-                                        (offset.x + pan.x).coerceIn(-maxX, maxX),
-                                        (offset.y + pan.y).coerceIn(-maxY, maxY)
-                                    )
-                                    changes.forEach { if (it.positionChanged()) it.consume() }
-                                }
-                                // When not zoomed + single finger: don't consume → pager handles swipe
-                            } while (changes.any { it.pressed })
+                                    // When not zoomed + single finger: don't consume → pager handles swipe
+                                } while (changes.any { it.pressed })
+                            }
+                        }
+                ) {
+                    AsyncImage(
+                        model = result.imagePath,
+                        contentDescription = result.title,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                rotationZ = result.displayRotationDegrees.toFloat()
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = offset.x
+                                translationY = offset.y
+                            },
+                        contentScale = ContentScale.Fit
+                    )
+
+                    if (showHistograms) {
+                        histograms[result.imagePath]?.let { histogram ->
+                            HistogramOverlay(
+                                histogram = histogram,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                            )
                         }
                     }
-            ) {
-                AsyncImage(
-                    model = result.imagePath,
-                    contentDescription = result.title,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            rotationZ = result.rotationDegrees.toFloat()
-                            scaleX = scale
-                            scaleY = scale
-                            translationX = offset.x
-                            translationY = offset.y
-                        },
-                    contentScale = ContentScale.Fit
-                )
 
-                if (referenceIndex >= 0 && page != referenceIndex) {
-                    IconButton(
-                        onClick = { onCompareWithReference(page) },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                            .background(
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                                CircleShape
+                    if (referenceIndex >= 0 && page != referenceIndex) {
+                        IconButton(
+                            onClick = { onCompareWithReference(page) },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.CompareArrows,
+                                contentDescription = "Compare with reference",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.CompareArrows,
-                            contentDescription = "Compare with reference",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        }
                     }
                 }
             }
+
+            HistogramToolbar(
+                showHistograms = showHistograms,
+                onToggleHistograms = onToggleHistograms,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 8.dp, top = 4.dp)
+            )
         }
 
         // Metrics overlay
@@ -469,6 +507,9 @@ fun CompareView(
     resultA: BenchmarkResult,
     resultB: BenchmarkResult,
     isVertical: Boolean = true,
+    histograms: Map<String, RgbHistogram> = emptyMap(),
+    showHistograms: Boolean = false,
+    onToggleHistograms: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
@@ -555,12 +596,18 @@ fun CompareView(
                     result = resultA,
                     scale = scale,
                     offset = offset,
+                    histogram = histograms[resultA.imagePath],
+                    showHistogram = showHistograms,
+                    histogramBottomPadding = 28.dp,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
                 CompareImageBox(
                     result = resultB,
                     scale = scale,
                     offset = offset,
+                    histogram = histograms[resultB.imagePath],
+                    showHistogram = showHistograms,
+                    histogramBottomPadding = 28.dp,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
             }
@@ -570,16 +617,28 @@ fun CompareView(
                     result = resultA,
                     scale = scale,
                     offset = offset,
+                    histogram = histograms[resultA.imagePath],
+                    showHistogram = showHistograms,
                     modifier = Modifier.weight(1f).fillMaxHeight()
                 )
                 CompareImageBox(
                     result = resultB,
                     scale = scale,
                     offset = offset,
+                    histogram = histograms[resultB.imagePath],
+                    showHistogram = showHistograms,
                     modifier = Modifier.weight(1f).fillMaxHeight()
                 )
             }
         }
+
+        HistogramToolbar(
+            showHistograms = showHistograms,
+            onToggleHistograms = onToggleHistograms,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 8.dp, top = 4.dp)
+        )
 
     }
 }
@@ -589,6 +648,9 @@ private fun CompareImageBox(
     result: BenchmarkResult,
     scale: Float,
     offset: Offset,
+    histogram: RgbHistogram?,
+    showHistogram: Boolean,
+    histogramBottomPadding: Dp = 8.dp,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -600,7 +662,7 @@ private fun CompareImageBox(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    rotationZ = result.rotationDegrees.toFloat()
+                    rotationZ = result.displayRotationDegrees.toFloat()
                     scaleX = scale
                     scaleY = scale
                     translationX = offset.x
@@ -608,6 +670,16 @@ private fun CompareImageBox(
                 },
             contentScale = ContentScale.Fit
         )
+        if (showHistogram) {
+            histogram?.let {
+                HistogramOverlay(
+                    histogram = it,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 8.dp, bottom = histogramBottomPadding)
+                )
+            }
+        }
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
             modifier = Modifier.align(Alignment.BottomCenter)

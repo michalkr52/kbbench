@@ -6,7 +6,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
-import android.graphics.Matrix
 import android.hardware.camera2.*
 import android.hardware.camera2.params.MeteringRectangle
 import androidx.core.content.FileProvider
@@ -19,6 +18,7 @@ import android.util.Log
 import android.view.OrientationEventListener
 import android.view.OrientationEventListener.ORIENTATION_UNKNOWN
 import android.view.Surface
+import android.webkit.MimeTypeMap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kbbench.algorithm.base.*
@@ -26,14 +26,20 @@ import com.kbbench.algorithm.impl.AlgorithmRegistry
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.WhiteBalance
+import com.kbbench.utils.RgbHistogram
+import com.kbbench.utils.calculateRgbHistogram
 import com.kbbench.utils.centerCropAndScale
-import com.kbbench.utils.decodeBitmapFromUri
 import com.kbbench.utils.getPreviewOutputSize
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
@@ -74,7 +80,7 @@ data class BenchmarkResult(
     val id: String,
     val title: String,
     val imagePath: String,
-    val rotationDegrees: Int = 0,
+    val displayRotationDegrees: Int = 0,
     val metrics: BenchmarkMetrics = BenchmarkMetrics()
 )
 
@@ -88,6 +94,32 @@ private data class AlgorithmOutputRecord(
     val width: Int,
     val height: Int,
     val runtimeMs: Long,
+)
+
+private data class CaptureMetadata(
+    val sourceFormat: String,
+    val width: Int,
+    val height: Int,
+    val exposureTimesMs: List<Double>,
+    val isoValues: List<Int>,
+    val captureTimeMs: Long,
+    val rawWhiteLevel: Int? = null,
+    val rawBlackLevel: Int? = null,
+    val cfaPattern: Int? = null,
+    val whiteBalanceGains: List<Float>? = null,
+)
+
+private data class ExportImageArtifact(
+    val path: String,
+    val role: String,
+    val width: Int,
+    val height: Int,
+    val frameIndex: Int? = null,
+)
+
+private data class PersistedPickedImage(
+    val file: File,
+    val sourceFormat: String,
 )
 
 class CameraViewModel : ViewModel() {
@@ -134,6 +166,22 @@ class CameraViewModel : ViewModel() {
     private val _benchmarkResults = MutableStateFlow<List<BenchmarkResult>>(emptyList())
     val benchmarkResults = _benchmarkResults.asStateFlow()
 
+    private val _histograms = MutableStateFlow<Map<String, RgbHistogram>>(emptyMap())
+    val histograms = _histograms.asStateFlow()
+
+    private var exportImageArtifacts: List<ExportImageArtifact> = emptyList()
+    private var captureMetadata = CaptureMetadata(
+        sourceFormat = "unknown",
+        width = 0,
+        height = 0,
+        exposureTimesMs = emptyList(),
+        isoValues = emptyList(),
+        captureTimeMs = 0L,
+    )
+
+    private var histogramJob: Job? = null
+    private var histogramGeneration = 0L
+
     private val _zoomLevel = MutableStateFlow(1f)
     val zoomLevel = _zoomLevel.asStateFlow()
 
@@ -152,6 +200,7 @@ class CameraViewModel : ViewModel() {
 
     private var cameraId: String? = null
     private var characteristics: CameraCharacteristics? = null
+    private var hasInitializedCaptureFormat = false
 
     private var orientationEventListener: OrientationEventListener? = null
     private var deviceOrientation = 0 // 0, 90, 180, 270
@@ -172,6 +221,16 @@ class CameraViewModel : ViewModel() {
 
         cameraId?.let {
             characteristics = manager.getCameraCharacteristics(it)
+        }
+
+        if (!hasInitializedCaptureFormat) {
+            val capabilities = characteristics?.get(
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES
+            )
+            if (CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in (capabilities ?: intArrayOf())) {
+                _captureFormat.value = ImageFormat.RAW_SENSOR
+            }
+            hasInitializedCaptureFormat = true
         }
 
         if (orientationEventListener == null) {
@@ -407,8 +466,12 @@ class CameraViewModel : ViewModel() {
                 val cfaPattern = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
                     ?: CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
 
-                // Convert captured frames to ARGB pixel arrays for algorithms
-                val framePixels = capturedFrames.map { frame -> decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern) }
+                // Convert captured frames to display-oriented ARGB pixels for algorithms
+                val rotation = computeRelativeRotation(chars)
+                val decodedFrames = capturedFrames.map { frame -> decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern) }
+                val framePixels = decodedFrames.map { (pixels, frameWidth, frameHeight) ->
+                    rotateArgb(pixels, frameWidth, frameHeight, rotation)
+                }
                 val width = framePixels.first().second
                 val height = framePixels.first().third
                 val pixelArrays = framePixels.map { it.first }
@@ -424,15 +487,23 @@ class CameraViewModel : ViewModel() {
                 // Close all captured images
                 capturedFrames.forEach { it.image.close() }
 
-                // Rotation: original JPEG has EXIF (Coil handles it), but algorithm
-                // output PNGs and RAW have no EXIF so they need explicit rotation
-                val rotation = computeRelativeRotation(chars)
-                val originalRotation = if (isRaw) rotation else 0
-                val outputRotation = rotation
-
                 // Run algorithms and build results
                 runBenchmarks(context, file, algorithms, pixelArrays, width, height,
-                    exposureTimes, isoValues, captureTimeMs, originalRotation, outputRotation)
+                    exposureTimes, isoValues, captureTimeMs, if (isRaw) rotation else 0,
+                    CaptureMetadata(
+                        sourceFormat = if (isRaw) "RAW_SENSOR" else "JPEG",
+                        width = width,
+                        height = height,
+                        exposureTimesMs = exposureTimes.map { it / 1_000_000.0 },
+                        isoValues = isoValues,
+                        captureTimeMs = captureTimeMs,
+                        rawWhiteLevel = if (isRaw) whiteLevel else null,
+                        rawBlackLevel = if (isRaw) blackLevel else null,
+                        cfaPattern = if (isRaw) cfaPattern else null,
+                        whiteBalanceGains = capturedFrames.first().metadata
+                            .get(CaptureResult.COLOR_CORRECTION_GAINS)
+                            ?.let { listOf(it.red, it.greenEven, it.blue) }
+                    ))
                 recomputeMetricsWithReference()
 
                 _currentScreen.value = AppScreen.RESULTS
@@ -487,6 +558,44 @@ class CameraViewModel : ViewModel() {
 
             Triple(pixels, w, h)
         }
+    }
+
+    private fun rotateArgb(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        rotationDegrees: Int,
+    ): Triple<IntArray, Int, Int> {
+        val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+        if (normalizedRotation == 0) return Triple(pixels, width, height)
+
+        val rotated = when (normalizedRotation) {
+            90 -> IntArray(pixels.size).also { output ->
+                for (y in 0 until height) {
+                    for (x in 0 until width) {
+                        output[x * height + (height - 1 - y)] = pixels[y * width + x]
+                    }
+                }
+            }
+            180 -> IntArray(pixels.size).also { output ->
+                for (y in 0 until height) {
+                    for (x in 0 until width) {
+                        output[(height - 1 - y) * width + (width - 1 - x)] = pixels[y * width + x]
+                    }
+                }
+            }
+            270 -> IntArray(pixels.size).also { output ->
+                for (y in 0 until height) {
+                    for (x in 0 until width) {
+                        output[(width - 1 - x) * height + y] = pixels[y * width + x]
+                    }
+                }
+            }
+            else -> error("Unsupported rotation: $rotationDegrees")
+        }
+        val rotatedWidth = if (normalizedRotation == 90 || normalizedRotation == 270) height else width
+        val rotatedHeight = if (normalizedRotation == 90 || normalizedRotation == 270) width else height
+        return Triple(rotated, rotatedWidth, rotatedHeight)
     }
 
     private suspend fun captureFrames(
@@ -587,20 +696,60 @@ class CameraViewModel : ViewModel() {
         exposureTimes: List<Long>,
         isoValues: List<Int>,
         captureTimeMs: Long,
-        originalRotation: Int,
-        outputRotation: Int
+        originalDisplayRotation: Int,
+        captureMetadata: CaptureMetadata
     ) {
         Log.d("CameraViewModel", "Running ${algorithms.size} algorithms on ${frames.size} frame(s)")
 
         val results = mutableListOf<BenchmarkResult>()
         val outputRecords = mutableListOf<AlgorithmOutputRecord>()
+        val artifacts = mutableListOf<ExportImageArtifact>()
+        val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
+
+        val preprocessedFiles = frames.mapIndexed { index, pixels ->
+            val preprocessedFile = File(
+                context.filesDir,
+                "PREPROCESSED_${timestamp}_$index.png"
+            )
+            saveArgbPng(preprocessedFile, pixels, width, height)
+            artifacts.add(
+                ExportImageArtifact(
+                    path = preprocessedFile.absolutePath,
+                    role = "preprocessed_input",
+                    width = width,
+                    height = height,
+                    frameIndex = index,
+                )
+            )
+            preprocessedFile
+        }
+
+        this.captureMetadata = captureMetadata
 
         results.add(BenchmarkResult(
             id = "original",
-            title = "Input Image",
+            title = "Original Capture",
             imagePath = originalFile.absolutePath,
-            rotationDegrees = originalRotation
+            displayRotationDegrees = originalDisplayRotation,
         ))
+        artifacts.add(
+            0,
+            ExportImageArtifact(
+                path = originalFile.absolutePath,
+                role = "original_capture",
+                width = width,
+                height = height,
+            )
+        )
+        if (preprocessedFiles.isNotEmpty()) {
+            results.add(
+                BenchmarkResult(
+                    id = "preprocessed",
+                    title = "Pre-processed Input",
+                    imagePath = preprocessedFiles.first().absolutePath
+                )
+            )
+        }
 
         for (algo in algorithms) {
             val minFrames = algo.metadata.frameRequirements.minFrames
@@ -635,13 +784,15 @@ class CameraViewModel : ViewModel() {
                 val outFile = File(context.filesDir, "OUT_${algo.name}_${sdf.format(Date())}.png")
                 var bitmap = Bitmap.createBitmap(output.width, output.height, Bitmap.Config.ARGB_8888)
                 bitmap.setPixels(output.pixels, 0, output.width, 0, 0, output.width, output.height)
-                if (outputRotation != 0) {
-                    val matrix = Matrix().apply { postRotate(outputRotation.toFloat()) }
-                    val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                    bitmap.recycle()
-                    bitmap = rotated
-                }
                 FileOutputStream(outFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                artifacts.add(
+                    ExportImageArtifact(
+                        path = outFile.absolutePath,
+                        role = "algorithm_output",
+                        width = bitmap.width,
+                        height = bitmap.height,
+                    )
+                )
                 bitmap.recycle()
 
                 outputRecords.add(AlgorithmOutputRecord(id, output.pixels, output.width, output.height, output.totalTime))
@@ -649,7 +800,6 @@ class CameraViewModel : ViewModel() {
                     id = id,
                     title = algo.name,
                     imagePath = outFile.absolutePath,
-                    rotationDegrees = 0,
                     metrics = BenchmarkMetrics(runtimeMs = output.totalTime)
                 ))
             } catch (e: Exception) {
@@ -658,20 +808,35 @@ class CameraViewModel : ViewModel() {
                     id = algo.name.lowercase(Locale.US),
                     title = "${algo.name} (failed)",
                     imagePath = originalFile.absolutePath,
-                    rotationDegrees = originalRotation,
+                    displayRotationDegrees = originalDisplayRotation,
                     metrics = BenchmarkMetrics(extra = mapOf("Error" to (e.message ?: "Unknown")))
                 ))
             }
         }
 
         lastAlgorithmOutputs = outputRecords
+        exportImageArtifacts = artifacts
         _benchmarkResults.value = results
+        refreshHistograms(results)
     }
 
     fun backToCamera() {
         _currentScreen.value = AppScreen.CAMERA
+        histogramGeneration++
+        histogramJob?.cancel()
+        histogramJob = null
+        _histograms.value = emptyMap()
         _benchmarkResults.value = emptyList()
         lastAlgorithmOutputs = emptyList()
+        exportImageArtifacts = emptyList()
+        captureMetadata = CaptureMetadata(
+            sourceFormat = "unknown",
+            width = 0,
+            height = 0,
+            exposureTimesMs = emptyList(),
+            isoValues = emptyList(),
+            captureTimeMs = 0L,
+        )
         _referenceImage.value?.bitmap?.recycle()
         _referenceImage.value = null
     }
@@ -681,21 +846,33 @@ class CameraViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             _isProcessing.value = true
             try {
-                val bitmap = decodeBitmapFromUri(context, uri) ?: return@launch
+                val persistedImage = persistPickedImage(context, uri, "IMG") ?: return@launch
+                val bitmap = BitmapFactory.decodeFile(persistedImage.file.absolutePath)
+                    ?: run {
+                        persistedImage.file.delete()
+                        return@launch
+                    }
                 val width = bitmap.width
                 val height = bitmap.height
                 val pixels = IntArray(width * height)
-                bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-                val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
-                val file = File(context.filesDir, "IMG_${sdf.format(Date())}.jpg")
-                FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-                bitmap.recycle()
+                try {
+                    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+                } finally {
+                    bitmap.recycle()
+                }
 
                 runBenchmarks(
-                    context, file, getEnabledAlgorithms(), listOf(pixels), width, height,
+                    context, persistedImage.file, getEnabledAlgorithms(), listOf(pixels), width, height,
                     exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
-                    originalRotation = 0, outputRotation = 0
+                    originalDisplayRotation = 0,
+                    captureMetadata = CaptureMetadata(
+                        sourceFormat = persistedImage.sourceFormat,
+                        width = width,
+                        height = height,
+                        exposureTimesMs = listOf(0.0),
+                        isoValues = listOf(100),
+                        captureTimeMs = 0L,
+                    )
                 )
                 recomputeMetricsWithReference()
 
@@ -713,13 +890,22 @@ class CameraViewModel : ViewModel() {
     fun loadReferenceImage(context: Context, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val bitmap = decodeBitmapFromUri(context, uri) ?: return@launch
-                val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
-                val file = File(context.filesDir, "REF_${sdf.format(Date())}.jpg")
-                FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                val persistedImage = persistPickedImage(context, uri, "REF") ?: return@launch
+                val bitmap = BitmapFactory.decodeFile(persistedImage.file.absolutePath)
+                    ?: run {
+                        persistedImage.file.delete()
+                        return@launch
+                    }
 
                 _referenceImage.value?.bitmap?.recycle()
-                _referenceImage.value = ReferenceImage(bitmap, file.absolutePath)
+                _referenceImage.value = ReferenceImage(bitmap, persistedImage.file.absolutePath)
+                exportImageArtifacts = exportImageArtifacts.filterNot { it.role == "reference_image" } +
+                    ExportImageArtifact(
+                        path = persistedImage.file.absolutePath,
+                        role = "reference_image",
+                        width = bitmap.width,
+                        height = bitmap.height,
+                    )
                 recomputeMetricsWithReference()
             } catch (e: Exception) {
                 Log.e("CameraViewModel", "Error loading reference image", e)
@@ -730,7 +916,39 @@ class CameraViewModel : ViewModel() {
     fun clearReferenceImage() {
         _referenceImage.value?.bitmap?.recycle()
         _referenceImage.value = null
+        exportImageArtifacts = exportImageArtifacts.filterNot { it.role == "reference_image" }
         recomputeMetricsWithReference()
+    }
+
+    private fun persistPickedImage(
+        context: Context,
+        uri: Uri,
+        prefix: String,
+    ): PersistedPickedImage? {
+        val mimeType = context.contentResolver.getType(uri)?.lowercase(Locale.US)
+        val extension = when (mimeType) {
+            "image/png" -> "png"
+            "image/jpeg", "image/jpg" -> "jpg"
+            else -> MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "img"
+        }
+        val sourceFormat = when (mimeType) {
+            "image/png" -> "PNG"
+            "image/jpeg", "image/jpg" -> "JPEG"
+            else -> mimeType?.substringAfterLast('/')?.uppercase(Locale.US) ?: "UNKNOWN"
+        }
+        val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
+        val file = File(context.filesDir, "${prefix}_$timestamp.$extension")
+
+        return try {
+            val input = context.contentResolver.openInputStream(uri) ?: return null
+            input.use { source ->
+                FileOutputStream(file).use { destination -> source.copyTo(destination) }
+            }
+            PersistedPickedImage(file, sourceFormat)
+        } catch (e: Exception) {
+            if (file.exists()) file.delete()
+            throw e
+        }
     }
 
     /** Rescoring all stored algorithm outputs against the current reference image, if any. */
@@ -749,7 +967,14 @@ class CameraViewModel : ViewModel() {
             .toMutableList()
 
         if (reference != null) {
-            val insertIndex = if (updated.isNotEmpty()) 1 else 0
+            val preprocessedIndex = updated.indexOfFirst { it.id == "preprocessed" }
+            val insertIndex = if (preprocessedIndex >= 0) {
+                preprocessedIndex + 1
+            } else if (updated.isNotEmpty()) {
+                1
+            } else {
+                0
+            }
             updated.add(
                 insertIndex.coerceAtMost(updated.size),
                 BenchmarkResult(id = "reference", title = "Reference", imagePath = reference.displayPath)
@@ -757,11 +982,41 @@ class CameraViewModel : ViewModel() {
         }
 
         _benchmarkResults.value = updated
+        refreshHistograms(updated)
+    }
+
+    private fun refreshHistograms(results: List<BenchmarkResult>) {
+        val generation = ++histogramGeneration
+        histogramJob?.cancel()
+
+        val paths = results.map { it.imagePath }.distinct()
+        _histograms.value = _histograms.value.filterKeys { it in paths }
+
+        histogramJob = viewModelScope.launch(Dispatchers.IO) {
+            val calculated = paths.mapNotNull { path ->
+                val bitmap = BitmapFactory.decodeFile(path) ?: return@mapNotNull null
+                val histogram = try {
+                    calculateRgbHistogram(bitmap)
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    bitmap.recycle()
+                }
+                histogram?.let { path to it }
+            }.toMap()
+
+            if (isActive && generation == histogramGeneration) {
+                _histograms.value = calculated
+            }
+        }
     }
 
     private fun metricsFor(runtimeMs: Long, pixels: IntArray, width: Int, height: Int): BenchmarkMetrics {
         val reference = _referenceImage.value ?: return BenchmarkMetrics(runtimeMs = runtimeMs)
-        val aligned = centerCropAndScale(reference.bitmap, width, height)
+        val referenceBitmap = BitmapFactory.decodeFile(reference.displayPath)
+            ?: return BenchmarkMetrics(runtimeMs = runtimeMs)
+        val aligned = centerCropAndScale(referenceBitmap, width, height)
+        referenceBitmap.recycle()
         val refPixels = IntArray(width * height)
         aligned.getPixels(refPixels, 0, width, 0, 0, width, height)
         aligned.recycle()
@@ -772,40 +1027,95 @@ class CameraViewModel : ViewModel() {
     fun exportResults(context: Context) {
         val results = _benchmarkResults.value
         if (results.isEmpty()) return
+        val artifacts = exportImageArtifacts.distinctBy { it.path }
 
-        // Build CSV report
-        val sb = StringBuilder()
-        sb.appendLine("ID,Title,Runtime (ms),PSNR (dB),SSIM,Image Path")
-        results.forEach { r ->
-            val m = r.metrics
-            sb.appendLine("${r.id},${r.title},${m.runtimeMs ?: ""},${m.psnr ?: ""},${m.ssim ?: ""},${r.imagePath}")
-        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val manifestFile = File(context.cacheDir, "benchmark_results.json")
+            manifestFile.writeText(buildExportManifest(artifacts, results))
 
-        val reportFile = File(context.cacheDir, "benchmark_report.csv")
-        reportFile.writeText(sb.toString())
+            val authority = "${context.packageName}.fileprovider"
+            val uris = ArrayList<android.net.Uri>()
+            uris.add(FileProvider.getUriForFile(context, authority, manifestFile))
 
-        val authority = "${context.packageName}.fileprovider"
-        val uris = ArrayList<android.net.Uri>()
-
-        uris.add(FileProvider.getUriForFile(context, authority, reportFile))
-
-        // Attach unique image files
-        val seenPaths = mutableSetOf<String>()
-        results.forEach { r ->
-            if (seenPaths.add(r.imagePath)) {
-                val imageFile = File(r.imagePath)
+            artifacts.forEach { artifact ->
+                val imageFile = File(artifact.path)
                 if (imageFile.exists()) {
                     uris.add(FileProvider.getUriForFile(context, authority, imageFile))
                 }
             }
-        }
 
-        val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-            type = "*/*"
-            putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            withContext(Dispatchers.Main) {
+                val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "*/*"
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "Export Benchmark Results"))
+            }
         }
-        context.startActivity(Intent.createChooser(shareIntent, "Export Benchmark Results"))
+    }
+
+    private fun buildExportManifest(
+        artifacts: List<ExportImageArtifact>,
+        results: List<BenchmarkResult>,
+    ): String {
+        val manifest = JSONObject()
+            .put(
+                "algorithm_input",
+                JSONObject()
+                    .put("pixel_format", "ARGB_8888")
+                    .put("channel_order", "ARGB")
+                    .put("brightness_range", "0-255")
+            )
+            .put(
+                "capture",
+                JSONObject()
+                    .put("source_format", captureMetadata.sourceFormat)
+                    .put("width", captureMetadata.width)
+                    .put("height", captureMetadata.height)
+                    .put("exposure_times_ms", JSONArray(captureMetadata.exposureTimesMs))
+                    .put("iso_values", JSONArray(captureMetadata.isoValues))
+                    .put("capture_time_ms", captureMetadata.captureTimeMs)
+            )
+
+        val capture = manifest.getJSONObject("capture")
+        captureMetadata.rawWhiteLevel?.let { capture.put("raw_white_level", it) }
+        captureMetadata.rawBlackLevel?.let { capture.put("raw_black_level", it) }
+        captureMetadata.cfaPattern?.let { capture.put("raw_cfa_pattern", it) }
+        captureMetadata.whiteBalanceGains?.let { capture.put("white_balance_gains", JSONArray(it)) }
+
+        val imageEntries = JSONArray()
+        artifacts.forEach { artifact ->
+            val file = File(artifact.path)
+            if (!file.exists()) return@forEach
+
+            val entry = JSONObject()
+                .put("role", artifact.role)
+                .put("file", file.name)
+                .put("width", artifact.width)
+                .put("height", artifact.height)
+            artifact.frameIndex?.let { entry.put("frame_index", it) }
+            imageEntries.put(entry)
+        }
+        manifest.put("images", imageEntries)
+
+        val resultEntries = JSONArray()
+        results.forEach { result ->
+            val metrics = result.metrics
+            val entry = JSONObject()
+                .put("id", result.id)
+                .put("title", result.title)
+                .put("image", File(result.imagePath).name)
+            metrics.runtimeMs?.let { entry.put("runtime_ms", it) }
+            metrics.psnr?.let { entry.put("psnr_db", it) }
+            metrics.ssim?.let { entry.put("ssim", it) }
+            if (metrics.extra.isNotEmpty()) {
+                entry.put("extra", JSONObject(metrics.extra))
+            }
+            resultEntries.put(entry)
+        }
+        manifest.put("results", resultEntries)
+        return manifest.toString(2)
     }
 
     fun closeCamera() {
@@ -816,6 +1126,17 @@ class CameraViewModel : ViewModel() {
         camera?.close()
         camera = null
         _isCameraReady.value = false
+    }
+
+    private fun saveArgbPng(file: File, pixels: IntArray, width: Int, height: Int) {
+        require(pixels.size == width * height) { "Pixel buffer size does not match image dimensions" }
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        try {
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+            FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun saveResult(context: Context, result: CombinedResult, chars: CameraCharacteristics): File {
