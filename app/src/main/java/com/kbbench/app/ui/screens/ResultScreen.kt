@@ -542,6 +542,13 @@ private fun ResultLabel(
                 style = MaterialTheme.typography.labelSmall
             )
         }
+        result.subtitle?.let { subtitle ->
+            Text(
+                text = subtitle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
         result.inputFrameDescription()?.let { description ->
             Text(
                 text = description,

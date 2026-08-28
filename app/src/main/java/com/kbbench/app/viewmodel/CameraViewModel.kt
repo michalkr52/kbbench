@@ -79,6 +79,7 @@ data class BenchmarkMetrics(
 data class BenchmarkResult(
     val id: String,
     val title: String,
+    val subtitle: String? = null,
     val imagePath: String,
     val displayRotationDegrees: Int = 0,
     val preprocessedFrameIndex: Int? = null,
@@ -729,14 +730,9 @@ class CameraViewModel : ViewModel() {
 
         this.captureMetadata = captureMetadata
 
-        results.add(BenchmarkResult(
-            id = "original",
-            title = "Original Capture",
-            imagePath = originalFile.absolutePath,
-            displayRotationDegrees = originalDisplayRotation,
-        ))
+        val isRawSource = captureMetadata.sourceFormat == "RAW_SENSOR"
+
         artifacts.add(
-            0,
             ExportImageArtifact(
                 path = originalFile.absolutePath,
                 role = "original_capture",
@@ -757,6 +753,16 @@ class CameraViewModel : ViewModel() {
                 )
             }
         }
+        // RAW DNGs have no canonical viewable rendering; surface as a labeled source artifact after the algorithm input.
+        results.add(
+            BenchmarkResult(
+                id = "original",
+                title = if (isRawSource) "RAW Source (DNG)" else "Original Capture",
+                subtitle = if (isRawSource) "Device-rendered preview" else null,
+                imagePath = originalFile.absolutePath,
+                displayRotationDegrees = originalDisplayRotation,
+            )
+        )
 
         for (algo in algorithms) {
             val minFrames = algo.metadata.frameRequirements.minFrames
