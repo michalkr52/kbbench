@@ -7,7 +7,6 @@ data class RgbHistogram(
     val green: IntArray,
     val blue: IntArray,
     val maxCount: Int,
-    val maxBrightness: Int = 255
 ) {
     val isEmpty: Boolean
         get() = maxCount == 0

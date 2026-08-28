@@ -91,18 +91,6 @@ fun HistogramOverlay(
                 drawHistogramBars(histogram.green, Color.Green, histogram.maxCount)
                 drawHistogramBars(histogram.blue, Color.Blue, histogram.maxCount)
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("0", style = MaterialTheme.typography.labelSmall)
-                    Text(
-                        text = histogram.maxBrightness.toString(),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-            }
         }
     }
 }
