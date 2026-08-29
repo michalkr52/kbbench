@@ -9,10 +9,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -20,9 +22,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CompareArrows
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -44,6 +49,7 @@ import com.kbbench.app.viewmodel.CameraViewModel
 import com.kbbench.app.ui.components.HistogramOverlay
 import com.kbbench.app.ui.components.HistogramToolbar
 import com.kbbench.utils.RgbHistogram
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,6 +67,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var showHistograms by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var exportAsZip by remember { mutableStateOf(false) }
+    var showMetricsTable by remember { mutableStateOf(false) }
     val histograms by viewModel.histograms.collectAsState()
 
     val loadReferenceLauncher = rememberLauncherForActivityResult(
@@ -77,6 +84,9 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 isSelectingForCompare = false
                 compareSelection = emptySet()
             }
+            showMetricsTable -> {
+                showMetricsTable = false
+            }
             selectedIndex != null -> {
                 selectedIndex = null
             }
@@ -89,6 +99,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     val displayTitle = when {
         compareIndices != null -> "Comparison"
         isSelectingForCompare -> "Select two images"
+        showMetricsTable -> "Metrics"
         selectedIndex != null -> results[currentPage].fullscreenTitle()
         else -> "Benchmark Results"
     }
@@ -107,6 +118,9 @@ fun ResultScreen(viewModel: CameraViewModel) {
                                 isSelectingForCompare = false
                                 compareSelection = emptySet()
                             }
+                            showMetricsTable -> {
+                                showMetricsTable = false
+                            }
                             selectedIndex != null -> {
                                 selectedIndex = null
                             }
@@ -116,7 +130,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         }
                     }) {
                         Icon(
-                            imageVector = if (selectedIndex == null && !isSelectingForCompare && compareIndices == null)
+                            imageVector = if (selectedIndex == null && !isSelectingForCompare && compareIndices == null && !showMetricsTable)
                                 Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close,
                             contentDescription = "Back"
                         )
@@ -131,6 +145,14 @@ fun ResultScreen(viewModel: CameraViewModel) {
                             )
                         }
                     } else if (selectedIndex == null && !isSelectingForCompare) {
+                        if (referenceImage != null && !showMetricsTable) {
+                            IconButton(onClick = { showMetricsTable = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.TableChart,
+                                    contentDescription = "View metrics table"
+                                )
+                            }
+                        }
                         IconButton(onClick = {
                             exportAsZip = false
                             showExportDialog = true
@@ -143,6 +165,12 @@ fun ResultScreen(viewModel: CameraViewModel) {
         }
     ) { padding ->
         when {
+            showMetricsTable -> {
+                MetricsTableView(
+                    results = results.filterNot { it.isInputTile() },
+                    modifier = Modifier.padding(padding)
+                )
+            }
             compareIndices != null -> {
                 val (a, b) = compareIndices!!
                 CompareView(
@@ -277,6 +305,178 @@ fun ResultScreen(viewModel: CameraViewModel) {
 /** Capture-derived artifacts (original + preprocessed frames + reference) shown ahead of algorithm outputs. */
 private fun BenchmarkResult.isInputTile(): Boolean =
     id == "original" || id == "reference" || id.startsWith("preprocessed_")
+
+private enum class MetricsSortColumn {
+    ALGORITHM,
+    RUNTIME,
+    PSNR,
+    SSIM,
+}
+
+@Composable
+private fun MetricsTableView(
+    results: List<BenchmarkResult>,
+    modifier: Modifier = Modifier
+) {
+    var sortColumn by remember { mutableStateOf(MetricsSortColumn.ALGORITHM) }
+    var sortAscending by remember { mutableStateOf(true) }
+
+    fun sortBy(column: MetricsSortColumn) {
+        if (sortColumn == column) {
+            sortAscending = !sortAscending
+        } else {
+            sortColumn = column
+            sortAscending = true
+        }
+    }
+
+    val sortedResults = results.sortedWith(Comparator { first, second ->
+        when (sortColumn) {
+            MetricsSortColumn.ALGORITHM -> compareText(first.title, second.title, sortAscending)
+            MetricsSortColumn.RUNTIME -> compareNullable(
+                first.metrics.runtimeMs,
+                second.metrics.runtimeMs,
+                sortAscending
+            )
+            MetricsSortColumn.PSNR -> compareNullable(first.metrics.psnr, second.metrics.psnr, sortAscending)
+            MetricsSortColumn.SSIM -> compareNullable(first.metrics.ssim, second.metrics.ssim, sortAscending)
+        }
+    })
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MetricsTableHeader(
+                    title = "Algorithm",
+                    column = MetricsSortColumn.ALGORITHM,
+                    activeColumn = sortColumn,
+                    ascending = sortAscending,
+                    onClick = ::sortBy,
+                    modifier = Modifier.weight(2f)
+                )
+                MetricsTableHeader(
+                    title = "Runtime",
+                    column = MetricsSortColumn.RUNTIME,
+                    activeColumn = sortColumn,
+                    ascending = sortAscending,
+                    onClick = ::sortBy,
+                    modifier = Modifier.weight(1.2f)
+                )
+                MetricsTableHeader(
+                    title = "PSNR",
+                    column = MetricsSortColumn.PSNR,
+                    activeColumn = sortColumn,
+                    ascending = sortAscending,
+                    onClick = ::sortBy,
+                    modifier = Modifier.weight(1.2f)
+                )
+                MetricsTableHeader(
+                    title = "SSIM",
+                    column = MetricsSortColumn.SSIM,
+                    activeColumn = sortColumn,
+                    ascending = sortAscending,
+                    onClick = ::sortBy,
+                    modifier = Modifier.weight(1.2f)
+                )
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = 16.dp)
+        ) {
+            lazyItems(sortedResults, key = { it.id }) { result ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = result.title,
+                        modifier = Modifier.weight(2f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    MetricsTableCell(
+                        value = result.metrics.runtimeMs?.let { "$it ms" } ?: "--",
+                        modifier = Modifier.weight(1.2f)
+                    )
+                    MetricsTableCell(
+                        value = result.metrics.psnr?.let { "%.2f dB".format(Locale.US, it) } ?: "--",
+                        modifier = Modifier.weight(1.2f)
+                    )
+                    MetricsTableCell(
+                        value = result.metrics.ssim?.let { "%.4f".format(Locale.US, it) } ?: "--",
+                        modifier = Modifier.weight(1.2f)
+                    )
+                }
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricsTableHeader(
+    title: String,
+    column: MetricsSortColumn,
+    activeColumn: MetricsSortColumn,
+    ascending: Boolean,
+    onClick: (MetricsSortColumn) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    TextButton(
+        onClick = { onClick(column) },
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+    ) {
+        Text(text = title, maxLines = 1)
+        if (column == activeColumn) {
+            Icon(
+                imageVector = if (ascending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                contentDescription = if (ascending) "Sorted ascending" else "Sorted descending",
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MetricsTableCell(value: String, modifier: Modifier = Modifier) {
+    Text(
+        text = value,
+        modifier = modifier,
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (value == "--") {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        }
+    )
+}
+
+private fun compareText(first: String, second: String, ascending: Boolean): Int {
+    val comparison = first.compareTo(second, ignoreCase = true)
+    return if (ascending) comparison else -comparison
+}
+
+private fun <T : Comparable<T>> compareNullable(
+    first: T?,
+    second: T?,
+    ascending: Boolean
+): Int {
+    if (first == null && second == null) return 0
+    if (first == null) return 1
+    if (second == null) return -1
+    return if (ascending) first.compareTo(second) else second.compareTo(first)
+}
 
 @Composable
 private fun ResultSectionHeader(title: String, modifier: Modifier = Modifier) {
