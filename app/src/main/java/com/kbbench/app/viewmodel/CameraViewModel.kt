@@ -230,6 +230,8 @@ class CameraViewModel : ViewModel() {
     private var orientationEventListener: OrientationEventListener? = null
     private var deviceOrientation = 0 // 0, 90, 180, 270
 
+    private var hasPurgedOrphanedFiles = false
+
     fun setCaptureFormat(format: Int) {
         _captureFormat.value = format
         if (format == ImageFormat.RAW_SENSOR) {
@@ -237,7 +239,25 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Removes persisted capture/preprocessed/output files left behind by previous process
+     * instances (e.g. after a crash or process death), since no in-memory state can reference
+     * them once the app cold-starts. Runs once per process lifetime.
+     */
+    private fun purgeOrphanedFilesOnce(context: Context) {
+        if (hasPurgedOrphanedFiles) return
+        hasPurgedOrphanedFiles = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val prefixes = listOf("IMG_", "REF_", "PREPROCESSED_", "OUT_")
+            val orphaned = context.filesDir.listFiles { file ->
+                prefixes.any { file.name.startsWith(it) }
+            } ?: return@launch
+            deleteFiles(orphaned.map { it.absolutePath })
+        }
+    }
+
     fun initialize(context: Context) {
+        purgeOrphanedFilesOnce(context)
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         cameraId = manager.cameraIdList.firstOrNull { id ->
             val chars = manager.getCameraCharacteristics(id)
@@ -897,6 +917,13 @@ class CameraViewModel : ViewModel() {
     }
 
     fun backToCamera() {
+        // The just-cleared session's persisted PNG/JPEG/DNG files are otherwise never deleted,
+        // which is what let filesDir grow unbounded across repeated test/benchmark runs.
+        val staleFilePaths = (_benchmarkResults.value.map { it.imagePath } +
+            exportImageArtifacts.map { it.path } +
+            listOfNotNull(_referenceImage.value?.displayPath))
+            .distinct()
+
         _currentScreen.value = AppScreen.CAMERA
         histogramGeneration++
         histogramJob?.cancel()
@@ -915,6 +942,24 @@ class CameraViewModel : ViewModel() {
         )
         _referenceImage.value?.bitmap?.recycle()
         _referenceImage.value = null
+
+        if (staleFilePaths.isNotEmpty()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                deleteFiles(staleFilePaths)
+            }
+        }
+    }
+
+    /** Deletes persisted files by absolute path, ignoring ones already gone. */
+    private fun deleteFiles(paths: List<String>) {
+        paths.forEach { path ->
+            try {
+                val file = File(path)
+                if (file.exists()) file.delete()
+            } catch (e: Exception) {
+                Log.w("CameraViewModel", "Failed to delete stale file: $path", e)
+            }
+        }
     }
 
     /** Bypasses the camera and runs all registered algorithms on a single picked image. */
