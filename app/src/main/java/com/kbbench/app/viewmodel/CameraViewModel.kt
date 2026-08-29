@@ -774,6 +774,16 @@ class CameraViewModel : ViewModel() {
                 height = height,
             )
         )
+        // Original capture leads the Input group chronologically; preprocessed frame(s) follow it.
+        results.add(
+            BenchmarkResult(
+                id = "original",
+                title = if (isRawSource) "RAW Source (DNG)" else "Camera JPEG",
+                subtitle = if (isRawSource) "Device-rendered preview" else null,
+                imagePath = originalFile.absolutePath,
+                displayRotationDegrees = originalDisplayRotation,
+            )
+        )
         if (preprocessedFiles.isNotEmpty()) {
             preprocessedFiles.forEachIndexed { index, preprocessedFile ->
                 results.add(
@@ -787,16 +797,6 @@ class CameraViewModel : ViewModel() {
                 )
             }
         }
-        // RAW DNGs have no canonical viewable rendering; surface as a labeled source artifact after the algorithm input.
-        results.add(
-            BenchmarkResult(
-                id = "original",
-                title = if (isRawSource) "RAW Source (DNG)" else "Original Capture",
-                subtitle = if (isRawSource) "Device-rendered preview" else null,
-                imagePath = originalFile.absolutePath,
-                displayRotationDegrees = originalDisplayRotation,
-            )
-        )
 
         val pendingOutputSaves = mutableListOf<Triple<String, File, AlgorithmOutput>>()
 

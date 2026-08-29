@@ -10,8 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -88,7 +89,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     val displayTitle = when {
         compareIndices != null -> "Comparison"
         isSelectingForCompare -> "Select two images"
-        selectedIndex != null -> results[currentPage].title
+        selectedIndex != null -> results[currentPage].fullscreenTitle()
         else -> "Benchmark Results"
     }
 
@@ -273,6 +274,69 @@ fun ResultScreen(viewModel: CameraViewModel) {
     }
 }
 
+/** Capture-derived artifacts (original + preprocessed frames + reference) shown ahead of algorithm outputs. */
+private fun BenchmarkResult.isInputTile(): Boolean =
+    id == "original" || id == "reference" || id.startsWith("preprocessed_")
+
+@Composable
+private fun ResultSectionHeader(title: String, modifier: Modifier = Modifier) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+    )
+}
+
+@Composable
+private fun ResultGridTile(
+    result: BenchmarkResult,
+    isSelected: Boolean,
+    isSelectingForCompare: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .aspectRatio(1f)
+            .then(
+                if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary,
+                    MaterialTheme.shapes.medium)
+                else Modifier
+            )
+            .clickable(onClick = onClick)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model = result.imagePath,
+                contentDescription = result.title,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        rotationZ = result.displayRotationDegrees.toFloat()
+                    },
+                contentScale = ContentScale.Crop
+            )
+            if (isSelectingForCompare) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
+                )
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            ) {
+                ResultLabel(
+                    result = result,
+                    modifier = Modifier.padding(4.dp)
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun ResultGridView(
     results: List<BenchmarkResult>,
@@ -284,6 +348,10 @@ fun ResultGridView(
     onCompare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val indexed = results.withIndex().toList()
+    val inputTiles = indexed.filter { (_, result) -> result.isInputTile() }
+    val resultTiles = indexed.filterNot { (_, result) -> result.isInputTile() }
+
     Column(modifier = modifier.fillMaxSize()) {
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
@@ -292,46 +360,30 @@ fun ResultGridView(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.weight(1f)
         ) {
-            itemsIndexed(results) { index, result ->
-                val isSelected = index in compareSelection
-                Card(
-                    modifier = Modifier
-                        .aspectRatio(1f)
-                        .then(
-                            if (isSelected) Modifier.border(3.dp, MaterialTheme.colorScheme.primary,
-                                MaterialTheme.shapes.medium)
-                            else Modifier
-                        )
-                        .clickable { onItemClick(index) }
-                ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        AsyncImage(
-                            model = result.imagePath,
-                            contentDescription = result.title,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .graphicsLayer {
-                                    rotationZ = result.displayRotationDegrees.toFloat()
-                                },
-                            contentScale = ContentScale.Crop
-                        )
-                        if (isSelectingForCompare) {
-                            Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = { onItemClick(index) },
-                                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
-                            )
-                        }
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                        ) {
-                            ResultLabel(
-                                result = result,
-                                modifier = Modifier.padding(4.dp)
-                            )
-                        }
-                    }
+            if (inputTiles.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    ResultSectionHeader("Input")
+                }
+                items(inputTiles, key = { it.index }) { (index, result) ->
+                    ResultGridTile(
+                        result = result,
+                        isSelected = index in compareSelection,
+                        isSelectingForCompare = isSelectingForCompare,
+                        onClick = { onItemClick(index) }
+                    )
+                }
+            }
+            if (resultTiles.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    ResultSectionHeader("Results")
+                }
+                items(resultTiles, key = { it.index }) { (index, result) ->
+                    ResultGridTile(
+                        result = result,
+                        isSelected = index in compareSelection,
+                        isSelectingForCompare = isSelectingForCompare,
+                        onClick = { onItemClick(index) }
+                    )
                 }
             }
         }
@@ -551,6 +603,14 @@ private fun BenchmarkResult.inputFrameDescription(): String? {
     if (inputFrameIndices.isEmpty()) return null
     val frames = inputFrameIndices.joinToString(", ") { (it + 1).toString() }
     return "Input frames: $frames"
+}
+
+/** Fullscreen title must disambiguate preprocessed frames, since the grid's "Frame X of Y" caption isn't shown there. */
+private fun BenchmarkResult.fullscreenTitle(): String {
+    if (preprocessedFrameIndex != null && preprocessedFrameCount != null) {
+        return "$title (Frame ${preprocessedFrameIndex + 1} of $preprocessedFrameCount)"
+    }
+    return title
 }
 
 /**
