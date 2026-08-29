@@ -45,12 +45,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.Closeable
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeoutException
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -1096,7 +1099,7 @@ class CameraViewModel : ViewModel() {
         BenchmarkMetrics(runtimeMs = runtimeMs, psnr = quality.psnr, ssim = quality.ssim)
     }
 
-    fun exportResults(context: Context) {
+    fun exportResults(context: Context, exportAsZip: Boolean = false) {
         val results = _benchmarkResults.value
         if (results.isEmpty()) return
         val artifacts = exportImageArtifacts
@@ -1108,18 +1111,46 @@ class CameraViewModel : ViewModel() {
             manifestFile.writeText(buildExportManifest(artifacts, results))
 
             val authority = "${context.packageName}.fileprovider"
-            val uris = ArrayList<android.net.Uri>()
-            uris.add(FileProvider.getUriForFile(context, authority, manifestFile))
+            val shareUri: android.net.Uri
+            if (exportAsZip) {
+                val zipFile = File(context.cacheDir, "benchmark_results.zip")
+                ZipOutputStream(FileOutputStream(zipFile)).use { zip ->
+                    zip.putNextEntry(ZipEntry(manifestFile.name))
+                    manifestFile.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
 
-            artifacts.forEach { artifact ->
-                val imageFile = File(artifact.path)
-                uris.add(FileProvider.getUriForFile(context, authority, imageFile))
+                    artifacts.forEach { artifact ->
+                        val imageFile = File(artifact.path)
+                        zip.putNextEntry(ZipEntry(imageFile.name))
+                        FileInputStream(imageFile).use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
+                }
+                shareUri = FileProvider.getUriForFile(context, authority, zipFile)
+            } else {
+                val uris = ArrayList<android.net.Uri>()
+                uris.add(FileProvider.getUriForFile(context, authority, manifestFile))
+
+                artifacts.forEach { artifact ->
+                    val imageFile = File(artifact.path)
+                    uris.add(FileProvider.getUriForFile(context, authority, imageFile))
+                }
+
+                withContext(Dispatchers.Main) {
+                    val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                        type = "*/*"
+                        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(shareIntent, "Export Benchmark Results"))
+                }
+                return@launch
             }
 
             withContext(Dispatchers.Main) {
-                val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
-                    type = "*/*"
-                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, shareUri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 context.startActivity(Intent.createChooser(shareIntent, "Export Benchmark Results"))

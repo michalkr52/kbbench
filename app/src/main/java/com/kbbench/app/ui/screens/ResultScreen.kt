@@ -58,6 +58,8 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var compareIndices by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var isCompareVertical by remember { mutableStateOf(true) }
     var showHistograms by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var exportAsZip by remember { mutableStateOf(false) }
     val histograms by viewModel.histograms.collectAsState()
 
     val loadReferenceLauncher = rememberLauncherForActivityResult(
@@ -128,7 +130,10 @@ fun ResultScreen(viewModel: CameraViewModel) {
                             )
                         }
                     } else if (selectedIndex == null && !isSelectingForCompare) {
-                        IconButton(onClick = { viewModel.exportResults(context) }) {
+                        IconButton(onClick = {
+                            exportAsZip = false
+                            showExportDialog = true
+                        }) {
                             Icon(Icons.Default.Share, contentDescription = "Export")
                         }
                     }
@@ -233,6 +238,38 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 }
             }
         }
+    }
+
+    if (showExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text("Export benchmark results") },
+            text = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = exportAsZip,
+                        onCheckedChange = { exportAsZip = it }
+                    )
+                    Text("Pack results into ZIP")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExportDialog = false
+                    viewModel.exportResults(context, exportAsZip)
+                }) {
+                    Text("Export")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
