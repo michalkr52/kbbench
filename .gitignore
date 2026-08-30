@@ -32,3 +32,10 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Reference papers kept locally alongside the algorithms
+*.pdf
+
+# Real images from published datasets
+algorithm/src/test/resources/pairs/
+algorithm/src/test/resources/clean/

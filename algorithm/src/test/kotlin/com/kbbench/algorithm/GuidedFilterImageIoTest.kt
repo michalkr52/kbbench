@@ -15,6 +15,12 @@ import kotlin.test.assertTrue
 /**
  * Runs both guided-filter variants over a real photo and leaves the filtered images plus a metrics
  * report in `build/test-output` for visual inspection.
+ *
+ * The PSNR and SSIM here are measured against the *input*, so they report how far a filter moved the
+ * image, not how good the result is — a denoiser that removed real noise scores worse by this
+ * measure, not better. Scoring quality needs ground truth: either a clean reference (the app's
+ * loaded reference image, or `GuidedFilterTest.improvesPsnrAgainstCleanReference`, which adds known
+ * noise to a synthetic image and measures the recovery).
  */
 class GuidedFilterImageIoTest {
 
@@ -74,7 +80,10 @@ class GuidedFilterImageIoTest {
             report.appendLine()
             report.appendLine("${algorithm.name} (${algorithm.metadata.description})")
             report.appendLine("  totalTime=${output.totalTime}ms")
-            report.appendLine("  psnr=${"%.4f".format(quality.psnr)}  ssim=${"%.6f".format(quality.ssim)}")
+            report.appendLine(
+                "  departure from input (distance, not quality): " +
+                    "psnr=${"%.4f".format(quality.psnr)} dB  ssim=${"%.6f".format(quality.ssim)}"
+            )
             report.appendLine("  after R: ${format(after.r)}")
             report.appendLine("  after G: ${format(after.g)}")
             report.appendLine("  after B: ${format(after.b)}")

@@ -6,7 +6,6 @@ import com.kbbench.algorithm.filter.BoxFilter
 import com.kbbench.algorithm.filter.GuidedFilter
 import com.kbbench.algorithm.impl.GuidedFilterColorDenoise
 import com.kbbench.algorithm.impl.GuidedFilterDenoise
-import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -138,6 +137,25 @@ class GuidedFilterTest {
         }
     }
 
+    /**
+     * The colour variant is a strict generalization: when the guidance channels are uncorrelated
+     * inside every window, `Sigma` is diagonal, so `A = I3 - eps * (Sigma + eps * U)^-1` collapses
+     * to `diag(var / (var + eps))` — exactly the scalar variant's coefficient. Holding G and B
+     * constant forces that situation, and the two implementations must then agree.
+     */
+    @Test
+    fun colorVariantReducesToScalarWhenChannelsAreUncorrelated() {
+        val width = 32
+        val height = 24
+        val random = Random(21)
+        val src = IntArray(width * height) { argb(255, random.nextInt(256), 120, 60) }
+
+        val scalar = GuidedFilter.filterGray(src, width, height, radius = 3, eps = EPS)
+        val color = GuidedFilter.filterColor(src, width, height, radius = 3, eps = EPS)
+
+        assertChannelsWithin(scalar, color, tolerance = 1)
+    }
+
     @Test
     fun preservesAlphaAndDimensions() {
         val width = 15
@@ -183,44 +201,6 @@ class GuidedFilterTest {
         assertFailsWith<IllegalArgumentException> { GuidedFilterColorDenoise(eps = -0.5) }
     }
 
-    private fun argb(a: Int, r: Int, g: Int, b: Int): Int =
-        (a shl 24) or (r shl 16) or (g shl 8) or b
-
-    private fun noiseImage(width: Int, height: Int, seed: Int): IntArray {
-        val random = Random(seed)
-        return IntArray(width * height) {
-            argb(255, random.nextInt(256), random.nextInt(256), random.nextInt(256))
-        }
-    }
-
-    /** Piecewise-smooth: two plateaus joined by a ramp, with a gentle vertical gradient. */
-    private fun smoothImage(width: Int, height: Int): IntArray {
-        val third = width / 3
-        return IntArray(width * height) { i ->
-            val x = i % width
-            val y = i / width
-            val base = when {
-                x < third -> 60
-                x < 2 * third -> 60 + (x - third) * 140 / third
-                else -> 200
-            } + y * 20 / height
-            argb(255, (base + 15).coerceIn(0, 255), base.coerceIn(0, 255), (base - 15).coerceIn(0, 255))
-        }
-    }
-
-    private fun withGaussianNoise(src: IntArray, sigma: Double, seed: Long): IntArray {
-        val random = java.util.Random(seed)
-        return IntArray(src.size) { i ->
-            val p = src[i]
-            argb(
-                p ushr 24,
-                (((p shr 16) and 0xFF) + (random.nextGaussian() * sigma).toInt()).coerceIn(0, 255),
-                (((p shr 8) and 0xFF) + (random.nextGaussian() * sigma).toInt()).coerceIn(0, 255),
-                ((p and 0xFF) + (random.nextGaussian() * sigma).toInt()).coerceIn(0, 255),
-            )
-        }
-    }
-
     private fun twiceBoxFiltered(src: IntArray, width: Int, height: Int, radius: Int): IntArray {
         val out = IntArray(src.size)
         val plane = FloatArray(src.size)
@@ -235,26 +215,6 @@ class GuidedFilterTest {
         }
         for (i in src.indices) out[i] = out[i] or (src[i] and (0xFF shl 24))
         return out
-    }
-
-    private fun channelStepAcrossEdge(pixels: IntArray, width: Int, row: Int, edge: Int): Double {
-        val left = (pixels[row * width + edge - 1] shr 16) and 0xFF
-        val right = (pixels[row * width + edge] shr 16) and 0xFF
-        return abs(right - left).toDouble()
-    }
-
-    private fun assertChannelsWithin(expected: IntArray, actual: IntArray, tolerance: Int) {
-        assertEquals(expected.size, actual.size)
-        for (i in expected.indices) {
-            for (shift in intArrayOf(16, 8, 0)) {
-                val e = (expected[i] shr shift) and 0xFF
-                val a = (actual[i] shr shift) and 0xFF
-                assertTrue(
-                    abs(e - a) <= tolerance,
-                    "index $i shift $shift: expected $e, got $a (tolerance $tolerance)",
-                )
-            }
-        }
     }
 
     private companion object {

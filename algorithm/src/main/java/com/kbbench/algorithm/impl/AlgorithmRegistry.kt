@@ -12,6 +12,9 @@ class AlgorithmRegistry {
         ExposureFusion(),
         GuidedFilterDenoise(),
         GuidedFilterColorDenoise(),
+        FastBilateralDenoise(),
+        LinearUnsharpMasking(),
+        AdaptiveUnsharpMasking(),
     )
 
     /** Returns all registered algorithms. */
