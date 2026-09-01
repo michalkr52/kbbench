@@ -4,24 +4,17 @@ import java.io.File
 import javax.imageio.ImageIO
 
 /**
- * Optional image sets that give the tests real ground truth, loaded from `src/test/resources`.
+ * Optional image sets giving the tests real ground truth, loaded from `src/test/resources`:
  *
- * Two shapes, because the two algorithm families need different things:
+ * - `clean/` — sharp, low-noise references (Set14, Kodak24, CBSD68). Tests degrade these in code and
+ *   score the recovery.
+ * - `pairs/clean/` and `pairs/noisy/` — real noisy/clean captures matched by filename (SIDD, PolyU,
+ *   RENOIR), where the degradation is a real sensor's rather than a model of one.
  *
- * - `clean/` holds sharp, low-noise reference images (Set14, Kodak24, CBSD68 and the like). Tests
- *   degrade them in code and score the recovery, so the truth is genuinely clean — unlike
- *   `input.png`, which is a real photo and carries sensor noise a restoration score would then
- *   reward an algorithm for reproducing.
- * - `pairs/clean/` and `pairs/noisy/` hold real noisy/clean captures matched by filename (SIDD,
- *   PolyU, RENOIR). Here the degradation is a real sensor's, not a model of one, which is the
- *   strongest evidence available for a denoiser.
+ * Both are gitignored, so tests that need them skip rather than pass. See the resources README.
  *
- * Both are absent by default and every test that needs them skips rather than passes, so a checkout
- * without the data still reports honestly. `pairs/` is gitignored: SIDD and friends are licensed for
- * research use without redistribution.
- *
- * Frames are centre-cropped to [MAX_FRAME] and never downscaled — resampling averages noise away and
- * would quietly flatter every denoiser.
+ * Frames are centre-cropped to [MAX_FRAME] and never downscaled: resampling averages noise away and
+ * would flatter every denoiser.
  */
 
 internal data class TestFrame(
@@ -44,10 +37,9 @@ internal fun loadCleanReferences(): List<TestFrame> =
     imageFilesIn(File(TEST_RESOURCES, "clean")).map { load(it, it.nameWithoutExtension) }
 
 /**
- * Real noisy/clean captures, empty when `pairs/` is missing.
- *
- * A clean frame with no identically named partner under `pairs/noisy/` is an error rather than a
- * silent omission — a half-copied dataset should not look like a small one.
+ * @return real noisy/clean captures, empty when `pairs/` is missing.
+ * @throws IllegalArgumentException if a `pairs/clean/` frame has no identically named partner under
+ *   `pairs/noisy/`, or the two differ in size — a half-copied dataset must not look like a small one.
  */
 internal fun loadNoisyPairs(): List<TestPair> {
     val cleanDir = File(TEST_RESOURCES, "pairs/clean")

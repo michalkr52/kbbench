@@ -24,7 +24,7 @@ tests real ground truth, where higher scores genuinely mean better.
 Drop clean, low-noise images here (Set14, Kodak24, CBSD68, DIV2K validation — anything sharp).
 `SharpeningRestorationTest` blurs each one, optionally adds noise, asks each sharpener to undo the
 damage, and scores the result against the untouched original. Reports to
-`build/test-output/sharpening_restoration.txt`.
+`build/test-output/sharpening_restoration.txt`. Gitignored, like `pairs/` below.
 
 Without this directory the test falls back to `input.png`, which still works but is a weaker truth:
 it is a real photo and carries sensor noise, so the noise-free rows partly reward an algorithm for
@@ -49,6 +49,6 @@ Sources worth using, all of which need renaming into the layout above:
 - **PolyU** real-world noisy images.
 - **RENOIR** low-light pairs.
 
-`pairs/` is gitignored: these datasets are licensed for research use and forbid redistribution, so
-each checkout supplies its own copy. Frames are centre-cropped to 512 px and never downscaled —
-resampling averages noise away and would flatter every denoiser.
+Both dataset directories are gitignored — published sets are licensed for research use and mostly
+forbid redistribution, so each checkout supplies its own copy. Frames are centre-cropped to 512 px
+and never downscaled: resampling averages noise away and would flatter every denoiser.

@@ -14,9 +14,9 @@ import kotlin.test.assertTrue
  * inspection, and measures the grid approximation against the brute-force definition on a crop —
  * the number worth quoting when comparing this filter with the guided filter.
  *
- * Note the two PSNR figures below mean different things. The one against the input measures how far
- * the filter moved the image and is not a quality score; the one against brute force is a genuine
- * accuracy measure, because there the reference really is the correct answer.
+ * The two PSNR figures mean different things: against the input it measures how far the filter moved
+ * the image and is not a quality score, while against brute force it is a genuine accuracy measure,
+ * the reference there being the correct answer. For denoising quality see [DenoiseGroundTruthTest].
  */
 class BilateralImageIoTest {
 

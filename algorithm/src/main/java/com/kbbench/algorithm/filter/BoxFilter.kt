@@ -4,32 +4,33 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Mean of a square `(2 * radius + 1)` window, computed as a separable two-pass running sum.
+ * Mean of a square `(2 * radius + 1)` window as a separable two-pass running sum, O(1) per pixel.
  *
- * Cost is O(1) per pixel regardless of [radius]. The window is clamped to the bounds of the
- * supplied plane and normalized by the number of pixels actually inside it, matching the
- * shrink-window convention used elsewhere in this module and the `N = boxfilter(ones(...), r)`
- * normalization of the reference implementation accompanying He et al. (2010).
- *
- * Clamping keeps the window a Cartesian product, so the horizontal count depends only on `x`
- * and the vertical count only on `y`. Separability is therefore exact, not an approximation.
+ * Windows are clamped to the plane and normalized by the pixel count actually inside, the
+ * shrink-window convention this module uses throughout and the one the reference implementation
+ * accompanying He et al. (2010) applies as `N = boxfilter(ones(...), r)`. Clamping leaves the window
+ * a Cartesian product, so separability stays exact rather than becoming an approximation.
  *
  * Running sums accumulate in [Double] while planes are stored as [Float]. A [Float] accumulator
- * would drift monotonically (~2 levels RMS across a 4000-pixel row of squared 8-bit values),
- * which shows up as a gradient rather than as noise.
+ * drifts monotonically — around 2 levels RMS across a 4000-pixel row of squared 8-bit values — and
+ * that reads as a gradient, not as noise.
  */
 object BoxFilter {
 
     /**
-     * Writes the windowed mean of [src] into [dst].
+     * Writes the windowed mean of [src] into [dst], using [tmp] for the intermediate pass.
      *
-     * [dst] may alias [src]; [tmp] must not alias either. The horizontal pass writes `src -> tmp`
-     * and the vertical pass writes `tmp -> dst`, so nothing reads [src] once it has been consumed.
-     * A running sum can never be computed in place: the recurrence subtracts `src[i - radius - 1]`,
-     * an element the same pass has already overwritten.
+     * [dst] may alias [src]; [tmp] must alias neither. A running sum cannot be computed in place at
+     * all, because the recurrence subtracts `src[i - radius - 1]`, which the same pass has already
+     * overwritten. Passing `src` as `dst` is safe only because the horizontal pass writes to [tmp]
+     * and nothing reads [src] afterwards.
      *
-     * @param width Plane width in pixels.
-     * @param height Plane height in pixels; only the first `width * height` entries are touched.
+     * @param width Plane width in pixels, positive.
+     * @param height Plane height in pixels, positive; only the first `width * height` entries of
+     *   each buffer are read or written.
+     * @param radius Window half-width, non-negative; `0` is the identity.
+     * @throws IllegalArgumentException if [tmp] aliases, a buffer is too small, or an argument is
+     *   out of range.
      */
     fun mean(
         src: FloatArray,
@@ -72,10 +73,7 @@ object BoxFilter {
         }
     }
 
-    /**
-     * Consumes the horizontal sums row by row, keeping one column accumulator, and divides by the
-     * true window area `countX * countY`.
-     */
+    /** Consumes [horizontalSums] row by row and divides once by the true window area. */
     private fun verticalMeans(src: FloatArray, dst: FloatArray, width: Int, height: Int, radius: Int) {
         val columnSums = DoubleArray(width)
 

@@ -14,10 +14,8 @@ import kotlin.test.assertTrue
  * Runs adaptive unsharp masking over a real photo and leaves the sharpened image plus a metrics
  * report in `build/test-output` for visual inspection of halo and noise behaviour.
  *
- * The PSNR and SSIM here are measured against the *input*, so they report how far the filter moved
- * the image rather than how good the result is. Ranking enhancement algorithms needs ground truth
- * the input cannot supply; Section III of the paper makes the same point and settles for visual
- * inspection.
+ * PSNR and SSIM here are against the *input*: they say how far the filter moved the image, not how
+ * good the result is. For quality scores see [SharpeningRestorationTest].
  */
 class AdaptiveUnsharpMaskImageIoTest {
 

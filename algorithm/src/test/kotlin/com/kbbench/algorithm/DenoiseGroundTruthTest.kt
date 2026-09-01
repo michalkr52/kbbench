@@ -14,16 +14,12 @@ import kotlin.test.assertTrue
 /**
  * Scores the denoisers against real noisy/clean capture pairs rather than against a model of noise.
  *
- * `GuidedFilterTest.improvesPsnrAgainstCleanReference` already makes the same claim, but with
- * additive white Gaussian noise on a synthetic image — a degradation no sensor actually produces.
- * Real noise is signal-dependent, spatially correlated by the demosaic, and different in every
- * channel, and a filter tuned against the Gaussian model can flatter itself badly. Pairs from SIDD,
- * PolyU or RENOIR remove that objection: the noisy frame is a real capture and the clean one is the
- * long-exposure or multi-shot average of the same scene.
+ * `GuidedFilterTest.improvesPsnrAgainstCleanReference` makes the same claim with additive white
+ * Gaussian noise, which no sensor produces: real noise is signal-dependent, correlated by the
+ * demosaic and unequal across channels, so a filter can flatter itself against the Gaussian model.
  *
- * Skipped, not passed, when `src/test/resources/pairs/` is empty — see [loadNoisyPairs] for the
- * layout. Those datasets are licensed for research use without redistribution, so the directory is
- * gitignored and each checkout has to supply its own copy.
+ * Skipped rather than passed when `src/test/resources/pairs/` is empty; see [loadNoisyPairs] for
+ * the layout and the resources README for where to obtain the data.
  */
 class DenoiseGroundTruthTest {
 

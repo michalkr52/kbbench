@@ -4,40 +4,24 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Guided image filtering (He, Sun, Tang, ECCV 2010) in its self-guided form, where the guidance
- * image equals the filtered image (`I = p`) and the filter acts as an edge-preserving smoother.
+ * Guided image filtering, He, Sun and Tang (ECCV 2010), in the self-guided form `I = p`.
+ * [filterGray] implements Algorithm 1 per colour channel, [filterColor] the colour guidance of
+ * Eq. 19.
  *
- * Two variants are exposed, matching the two formulations in the paper:
- * - [filterGray] applies the scalar filter to R, G and B independently (Algorithm 1).
- * - [filterColor] uses the full RGB image as guidance and solves a 3x3 system per pixel (Eq. 19).
- *
- * Both operate on ARGB_8888 pixels packed into [Int] in row-major order and preserve alpha.
- *
- * ### Banding
- *
- * Images are processed in horizontal bands so that memory stays bounded and independent of
- * resolution. Producing output rows `[y0, y1)` requires `a` and `b` on `[y0 - r, y1 + r)`, which
- * in turn require the guidance on `[y0 - 2r, y1 + 2r)` — a halo of exactly `2 * radius`.
- *
- * [BoxFilter] clamps its window to the plane it is handed rather than to the full image, and that
- * is sufficient: the halo rows do end up holding truncated-window values, but the kept rows never
- * read them. The first stage at row `y0 - r` spans `[y0 - 2r, y0]`, whose lower edge is exactly the
- * top of the loaded band, and the second stage at row `y0` spans `[y0 - r, y0 + r]`, entirely
- * inside the range the first stage computed correctly. Where a band abuts the real image edge the
- * truncation is the intended shrink-window behaviour. Banded output is therefore equivalent to
- * whole-image output.
- *
- * The vertical running sums restart at each band, so their accumulation order differs from a
- * single-band run. The first box filter is nevertheless bit-identical (its inputs are integral and
- * [Double] is exact well beyond the sums involved); the second differs by ~1e-9, far below the
- * output LSB.
+ * Departures from the paper:
+ * - Images are processed in horizontal bands to bound memory; see [forEachBand] for the halo rule.
+ * - The local variance is clamped to zero before use. `corr - mean^2` evaluated from [Float] planes
+ *   can come out slightly negative in a flat region, which would make `a` negative or produce a NaN.
+ * - Output is rounded rather than truncated. Truncation would darken every channel by half a level
+ *   on average.
+ * - Border windows shrink instead of being padded, the convention [BoxFilter] uses.
  */
 object GuidedFilter {
 
-    /** Working-set budget used to pick a band height when the caller does not supply one. */
     private const val TARGET_WORKING_BYTES = 32L * 1024 * 1024
     private const val MIN_BAND_HEIGHT = 16
 
+    /** Simultaneously live [FloatArray] planes in [filterGray] and [filterColor] respectively. */
     private const val PLANES_GRAY = 4
     private const val PLANES_COLOR = 11
 
@@ -46,8 +30,8 @@ object GuidedFilter {
     private val CHANNEL_SHIFTS = intArrayOf(16, 8, 0)
 
     /**
-     * Symmetric 3x3 covariance laid out as `[rr, rg, rb, gg, gb, bb]`, and the index of each
-     * `(channel, channel)` pair within it.
+     * Channel pairs of the symmetric covariance, whose six entries are stored in the order
+     * `[rr, rg, rb, gg, gb, bb]`.
      */
     private val COVARIANCE_PAIRS = arrayOf(
         intArrayOf(0, 0), intArrayOf(0, 1), intArrayOf(0, 2),
@@ -57,12 +41,17 @@ object GuidedFilter {
     /**
      * Filters each colour channel independently, guided by itself.
      *
-     * Substituting `p := I` into Algorithm 1 gives `mean_p = mean_I` and `cov_Ip = var_I`, hence
-     * `a = var / (var + eps)` and `b = mean_I * (1 - a)`. This is an exact rewrite, not an
-     * approximation — it is the edge-preserving special case of Section 3.2.
+     * With `p = I`, Algorithm 1's `cov_Ip` is `var_I` and `mean_p` is `mean_I`, so the coefficients
+     * reduce to `a = var / (var + eps)` and `b = mean_I * (1 - a)`. That is an exact rewrite, which
+     * is why the code does not mirror the paper's general form.
      *
-     * @param eps Regularization on the 8-bit intensity scale.
-     * @param bandHeight Rows produced per band; `0` picks a value from [TARGET_WORKING_BYTES].
+     * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
+     * @param radius Window half-width in pixels, at least 1.
+     * @param eps Regularization on the 8-bit intensity scale, strictly positive.
+     * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
+     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
+     * @throws IllegalArgumentException if the dimensions disagree with [src], or a parameter is out
+     *   of range.
      */
     fun filterGray(
         src: IntArray,
@@ -100,8 +89,7 @@ object GuidedFilter {
                 BoxFilter.mean(bufB, bufB, scratch, width, rows, radius)
                 BoxFilter.mean(guidance, bufA, scratch, width, rows, radius)
 
-                // Fused: variance, then a, then b. Kept in one sweep because all three are
-                // index-local and b consumes the mean that a's buffer would otherwise overwrite.
+                // One sweep, because b reads the mean that a's own buffer would overwrite.
                 for (i in 0 until count) {
                     val m = bufA[i].toDouble()
                     val variance = max(bufB[i].toDouble() - m * m, 0.0)
@@ -139,16 +127,20 @@ object GuidedFilter {
     }
 
     /**
-     * Filters using the full RGB image as guidance, solving `(Sigma + eps * U) a = cov` per pixel.
+     * Filters using the full RGB frame as guidance, Eq. 19.
      *
-     * Two reductions keep this to eleven planes rather than the twenty-odd a literal reading
-     * suggests. Because the filter is self-guided, `cov_Ip` for output channel `c` is simply the
-     * `c`-th column of `Sigma`. And with `M = (Sigma + eps * U)^-1` the solution collapses to
-     * `A = I3 - eps * M` and `b = eps * M * mean_I`, both symmetric and both writable in place over
-     * `Sigma` and `mean_I` respectively.
+     * Self-guidance makes `cov_Ip` for output channel `c` the `c`-th column of `Sigma`, and with
+     * `M = (Sigma + eps * U)^-1` the per-pixel solution collapses to `A = I3 - eps * M` and
+     * `b = eps * M * mean_I`. Both are symmetric, so six and three planes hold them, and both
+     * overwrite the buffers they are derived from.
      *
-     * @param eps Regularization on the 8-bit intensity scale.
-     * @param bandHeight Rows produced per band; `0` picks a value from [TARGET_WORKING_BYTES].
+     * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
+     * @param radius Window half-width in pixels, at least 1.
+     * @param eps Regularization on the 8-bit intensity scale, strictly positive.
+     * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
+     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
+     * @throws IllegalArgumentException if the dimensions disagree with [src], or a parameter is out
+     *   of range.
      */
     fun filterColor(
         src: IntArray,
@@ -164,7 +156,7 @@ object GuidedFilter {
         val band = resolveBandHeight(bandHeight, width, height, radius, PLANES_COLOR)
         val capacity = width * bandCapacityRows(band, height, radius)
 
-        // meanI[c] becomes b[c]; covariance[k] becomes A[k]. Both transitions happen in place.
+        // meanI[c] later holds b[c] and covariance[k] later holds A[k]; see solveCoefficients.
         val meanI = Array(3) { FloatArray(capacity) }
         val covariance = Array(6) { FloatArray(capacity) }
         val plane = FloatArray(capacity)
@@ -240,16 +232,13 @@ object GuidedFilter {
     }
 
     /**
-     * Turns `(mean_I, Sigma)` into `(b, A)` in place.
+     * Replaces `mean_I` with `b` and `Sigma` with `A`, in place, over the first [count] entries.
      *
-     * `A` needs `M` and `b` needs both `M` and the original `mean_I`, so the two must be produced
-     * in a single sweep — computing them in separate passes would read buffers the other pass has
-     * already clobbered.
-     *
-     * The 3x3 inverse runs in [Double]: cofactor products reach ~2.6e8 and cancel against each
-     * other, and [Float] would lose exactly the small-determinant regime the filter cares about.
-     * `Sigma + eps * U` has every eigenvalue at least `eps`, so with `eps > 0` it is never
-     * singular; clamping the diagonal keeps that true numerically as well as algebraically.
+     * Both must be produced in one sweep: `b` needs `M` and the original `mean_I`, while `A`
+     * overwrites the buffers holding them. The inverse runs in [Double] because the cofactor
+     * products reach ~2.6e8 and cancel, a range in which [Float] would lose the small determinants
+     * that matter here. Clamping the diagonal keeps `Sigma + eps * U` positive definite
+     * numerically, not just algebraically, so it is never singular for `eps > 0`.
      */
     private fun solveCoefficients(
         meanI: Array<FloatArray>,
@@ -298,14 +287,12 @@ object GuidedFilter {
     }
 
     /**
-     * Rounds to nearest and clamps to `[0, 255]`.
-     *
-     * `mean_a * I + mean_b` is not a pointwise convex combination, so it can overshoot slightly at
-     * edges. Rounding rather than truncating matters here: truncation would darken every channel by
-     * half a level on average across the whole image.
+     * @return [value] rounded to nearest and clamped to `[0, 255]`. The clamp is load-bearing:
+     *   `mean_a * I + mean_b` is not a pointwise convex combination and can overshoot at edges.
      */
     private fun round(value: Float): Int = (value + 0.5f).toInt().coerceIn(0, 255)
 
+    /** @throws IllegalArgumentException if any argument is out of range for the filter. */
     private fun validate(src: IntArray, width: Int, height: Int, radius: Int, eps: Double) {
         require(width > 0 && height > 0) { "Image must be non-empty, got ${width}x$height" }
         require(src.size == width * height) {
@@ -315,10 +302,11 @@ object GuidedFilter {
         require(eps > 0.0) { "eps must be > 0, got $eps" }
     }
 
-    /** Rows a band buffer must hold: the band itself plus a `2 * radius` halo on each side. */
+    /** @return rows a band buffer must hold: the band plus a `2 * radius` halo on each side. */
     private fun bandCapacityRows(band: Int, height: Int, radius: Int): Int =
         min(height, band + 4 * radius)
 
+    /** @return [requested] if positive, otherwise the tallest band fitting [TARGET_WORKING_BYTES]. */
     private fun resolveBandHeight(
         requested: Int,
         width: Int,
@@ -333,6 +321,13 @@ object GuidedFilter {
         return band.coerceAtLeast(MIN_BAND_HEIGHT.toLong()).coerceAtMost(height.toLong()).toInt()
     }
 
+    /**
+     * Invokes [action] per band with the output rows `[y0, y1)` and the loaded rows `[s0, s1)`.
+     *
+     * The halo is exactly `2 * radius`: output rows need `a` and `b` on `[y0 - r, y1 + r)`, which
+     * need the guidance on `[y0 - 2r, y1 + 2r)`. Halo rows do end up holding truncated-window
+     * values, but no kept row reads them, so banded output equals whole-image output.
+     */
     private inline fun forEachBand(
         height: Int,
         radius: Int,

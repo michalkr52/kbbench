@@ -53,12 +53,10 @@ internal fun withGaussianNoise(src: IntArray, sigma: Double, seed: Long): IntArr
 }
 
 /**
- * Windowed-mean blur, used as the known degradation in restoration tests: blur a frame, hand it to
- * an enhancer, and score the result against the untouched original. That detour is what turns PSNR
- * into a quality measure — scored against the input a sharpener only reports how hard it pushed.
+ * Windowed-mean blur, the known degradation in restoration tests. A `radius = 1` window matches the
+ * 3x3 reach of both unsharp-masking operators, so it is damage they could in principle undo.
  *
- * A `radius = 1` window matches the 3x3 reach of both unsharp-masking operators, so the degradation
- * is one the sharpeners could in principle undo.
+ * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
  */
 internal fun boxBlurred(src: IntArray, width: Int, height: Int, radius: Int): IntArray {
     val out = IntArray(src.size)

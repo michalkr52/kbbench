@@ -7,53 +7,25 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Fast bilateral filtering by the signal-processing approach of Paris and Durand (ECCV 2006).
+ * Fast approximation of the bilateral filter, Paris and Durand (ECCV 2006): [splat] the image into a
+ * `(x, y, intensity)` grid downsampled to `(sigmaSpatial, sigmaRange)`, [blur] it, then [slice] it
+ * back. Cells carry homogeneous `(w * I, w)`, so one linear blur yields both the numerator and the
+ * normalizing denominator and the division happens once, at the end.
  *
- * The brute-force bilateral filter of Tomasi and Manduchi costs O(r^2) per pixel because the range
- * weight `G_sigmaR(|I_p - I_q|)` makes it non-linear. Paris and Durand's observation is that lifting
- * the image into a three-dimensional space of `(x, y, intensity)` turns it into an ordinary *linear*
- * convolution:
- *
- * ```
- * splat:    each pixel deposits (I_p, 1) at grid position (x/ss, y/ss, I_p/sr)
- * blur:     convolve the grid with a separable Gaussian
- * slice:    read the grid back at each pixel's own position, then divide
- * ```
- *
- * Carrying the pair `(w * I, w)` — homogeneous coordinates — is what lets a single linear blur
- * produce both the numerator and the normalizing denominator of the bilateral filter. The division
- * happens once, at the end.
- *
- * Because a Gaussian is a lowpass filter, the grid may be sampled at the very rate the Gaussian
- * would smooth away, so cell size is set to `(sigmaSpatial, sigmaRange)` and the blur reduces to a
- * fixed `sigma = 1` kernel in grid units. That is the whole speedup: cost becomes O(N) plus a grid
- * pass, **independent of sigma**, where the exact filter grows as sigma^2.
- *
- * ### Departures from the paper, and why
- *
- * - The paper filters grayscale. A joint colour range kernel would need a five-dimensional grid
- *   `(x, y, R, G, B)`, which at realistic settings runs to hundreds of megabytes. This uses the
- *   three-dimensional grid keyed on luma while carrying `(w*R, w*G, w*B, w)` in each cell, so one
- *   shared weight drives all three channels — the arrangement Chen, Paris and Durand (SIGGRAPH
- *   2007) use. Colour edges are therefore resolved by their luma contrast; an isoluminant colour
- *   edge is not seen as an edge. Per-channel range kernels would avoid that but reintroduce the
- *   false colours Tomasi and Manduchi warn about, which is the worse trade.
- * - The convolution kernel is the binomial `[1, 4, 6, 4, 1] / 16`, whose variance is exactly one
- *   grid cell, rather than a sampled Gaussian.
- * - Cells beyond the grid contribute nothing to the convolution. No padding is needed to make that
- *   correct: numerator and denominator are convolved with the identical truncated kernel, so the
- *   ratio remains a proper weighted average. Truncation is self-normalizing here in a way it would
- *   not be for a non-homogeneous filter.
- * - Splatting rounds to the nearest cell while slicing interpolates trilinearly. The paper notes
- *   this asymmetry is deliberate and costs little.
- *
- * ### Banding
- *
- * Grids are built per horizontal band. Output rows `[y0, y1)` slice grid rows
- * `floor(y0/ss) .. floor((y1-1)/ss) + 1`, each of which needs splatted rows within
- * [KERNEL_RADIUS] of it, so the band loads exactly the pixel rows that round into that window.
- * Grid indices are derived from *absolute* pixel coordinates, so cell alignment does not shift
- * between bands and banded output equals whole-image output.
+ * Departures from the paper:
+ * - The paper filters grayscale. A joint colour range kernel would need a five-dimensional
+ *   `(x, y, R, G, B)` grid, hundreds of megabytes at realistic settings, so the grid is keyed on
+ *   luma and each cell carries `(w*R, w*G, w*B, w)` — the arrangement of Chen, Paris and Durand
+ *   (SIGGRAPH 2007). One shared weight therefore drives all three channels, and an isoluminant
+ *   colour edge is not seen as an edge. Per-channel range kernels would see it, but at the cost of
+ *   the false colours Tomasi and Manduchi warn about.
+ * - The blur kernel is the binomial `[1, 4, 6, 4, 1] / 16`, variance exactly one cell, rather than a
+ *   sampled Gaussian.
+ * - No padding around the grid. Numerator and denominator are convolved with the same truncated
+ *   kernel, so their ratio stays a proper weighted average; truncation is self-normalizing here in a
+ *   way it would not be without homogeneous coordinates.
+ * - Images are processed in horizontal bands to bound memory. Grid indices come from *absolute*
+ *   pixel coordinates so the lattice does not shift between bands; see [filter] for the halo rule.
  */
 object BilateralGrid {
 
@@ -65,7 +37,11 @@ object BilateralGrid {
     private const val TARGET_WORKING_BYTES = 32L * 1024 * 1024
     private const val MIN_BAND_HEIGHT = 8
 
-    /** Grid holds (w*R, w*G, w*B, w) plus one scratch plane for the separable blur. */
+    /**
+     * Four homogeneous planes `(w*R, w*G, w*B, w)` plus one scratch plane for the separable blur.
+     * Each is indexed `((gy * gridWidth) + gx) * gridDepth + gz`, so z is contiguous, x has stride
+     * `gridDepth` and y has stride `gridWidth * gridDepth` — the strides [convolve] is given.
+     */
     private const val GRID_PLANES = 5
 
     private const val ALPHA_MASK = 0xFF shl 24
@@ -75,9 +51,19 @@ object BilateralGrid {
     private const val WEIGHT_FLOOR = 1e-6
 
     /**
-     * @param sigmaSpatial Spatial standard deviation in pixels; also the grid's spatial cell size.
-     * @param sigmaRange Range standard deviation on the 8-bit intensity scale; also the cell depth.
-     * @param bandHeight Rows produced per band; `0` picks a value from [TARGET_WORKING_BYTES].
+     * Output rows `[y0, y1)` slice grid rows `floor(y0/ss)` through `floor((y1-1)/ss) + 1`, and each
+     * of those needs splatted rows within [KERNEL_RADIUS] cells of it, so a band loads exactly the
+     * pixel rows rounding into that widened window.
+     *
+     * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
+     * @param sigmaSpatial Spatial standard deviation in pixels, strictly positive. Doubles as the
+     *   grid's spatial cell size, so raising it makes the filter cheaper rather than costlier.
+     * @param sigmaRange Range standard deviation on the 8-bit intensity scale, strictly positive.
+     *   Doubles as the grid's cell depth.
+     * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
+     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
+     * @throws IllegalArgumentException if the dimensions disagree with [src], or a sigma is not
+     *   positive.
      */
     fun filter(
         src: IntArray,
@@ -155,6 +141,11 @@ object BilateralGrid {
         return out
     }
 
+    /**
+     * Accumulates pixel rows `[fromRow, toRow)` into the band's grid, which covers absolute grid
+     * rows `[gridLo, gridLo + gridRows)`. Rows rounding outside that span are skipped; by
+     * construction no sliced row depends on them.
+     */
     private fun splat(
         src: IntArray,
         width: Int,
@@ -203,8 +194,9 @@ object BilateralGrid {
     }
 
     /**
-     * Convolves along one axis. The array is viewed as [groups] blocks, each holding [count]
-     * samples spaced [stride] apart, with [outer] independent interleaved lanes per block.
+     * Convolves [src] into [dst] along one axis, viewing the array as [groups] blocks of [count]
+     * samples spaced [stride] apart, with [outer] interleaved lanes sharing each block. Taps falling
+     * outside the block are dropped rather than clamped or wrapped.
      */
     private fun convolve(
         src: FloatArray,
@@ -232,6 +224,10 @@ object BilateralGrid {
         }
     }
 
+    /**
+     * Writes output rows `[y0, y1)` into [out], reading the blurred grid trilinearly at each pixel's
+     * own continuous position.
+     */
     private fun slice(
         src: IntArray,
         out: IntArray,
@@ -276,6 +272,10 @@ object BilateralGrid {
         }
     }
 
+    /**
+     * @return [grid] sampled trilinearly at `(fy, fx, fz)` in cell units. Corners outside the grid
+     *   are dropped, which matches [convolve] treating absent cells as empty.
+     */
     private fun interpolate(
         grid: FloatArray,
         fy: Double,
@@ -324,12 +324,10 @@ object BilateralGrid {
     private fun round(value: Double): Int = (value + 0.5).toInt().coerceIn(0, 255)
 
     /**
-     * Grid rows a band buffer must hold, including the [KERNEL_RADIUS] halo on each side.
-     *
-     * A band spans at most `floor((band - 1) / ss) + 1` grid rows of its own, plus one for the
-     * trilinear neighbour above; `floor(a + d) - floor(a)` can exceed `floor(d)` by one, so a
-     * further row is reserved for that. Under-counting here would overflow the buffer, and
-     * `bandedOutputMatchesSingleBandOutput` exercises every division that could trip it.
+     * @return grid rows a band buffer must hold, including the [KERNEL_RADIUS] halo on each side.
+     *   The `+ 3` covers the band's own `floor((band - 1) / ss) + 1` rows, the trilinear neighbour
+     *   above, and the fact that `floor(a + d) - floor(a)` can exceed `floor(d)` by one.
+     *   Under-counting overflows the grid buffer.
      */
     private fun gridRowSpan(band: Int, sigmaSpatial: Double, lastGridRow: Int): Int {
         val span = floor((band - 1) / sigmaSpatial).toInt() + 3 + 2 * KERNEL_RADIUS

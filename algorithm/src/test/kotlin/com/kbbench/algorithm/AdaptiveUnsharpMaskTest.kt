@@ -40,9 +40,8 @@ class AdaptiveUnsharpMaskTest {
     }
 
     /**
-     * The headline claim of the paper. Where the local variance stays below `tau1` the desired
-     * dynamics are `alpha_b * g_x = g_x`, so the error is `-A^T G`, which at `A = 0` is exactly zero:
-     * the gains never move and the noise is passed through untouched rather than amplified.
+     * Below `tau1` the desired dynamics are `alpha_b * g_x = g_x`, so the error is `-A^T G`, which at
+     * `A = 0` is exactly zero: the gains never move and the noise passes through untouched.
      *
      * The detail case is checked alongside it so the test cannot pass by the filter being inert.
      */

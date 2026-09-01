@@ -34,11 +34,7 @@ class LinearUnsharpMaskTest {
         assertContentEquals(src, sharpen(src, width, height, lambda = 0.0))
     }
 
-    /**
-     * The algorithm is closed form, so a reference transcribed straight from Eq. (1) and (2) has to
-     * reproduce it bit for bit — including the rolling three-row buffer's border replication, which
-     * the reference expresses by clamping the row index instead.
-     */
+    /** Closed form, so a reference transcribed from Eq. (1) and (2) must match bit for bit. */
     @Test
     fun matchesClosedFormReference() {
         val width = 31
@@ -57,12 +53,11 @@ class LinearUnsharpMaskTest {
     }
 
     /**
-     * What licenses using this as the baseline for [AdaptiveUnsharpMasking]: the two directional
-     * Laplacians of Eq. (3) and (4) sum to the highpass of Eq. (2), so linear UM is precisely the
-     * adaptive filter with both gains frozen at `lambda`.
+     * Eq. (3) and (4) sum to the highpass of Eq. (2), so linear UM is the adaptive filter with both
+     * gains frozen at `lambda`. This is what licenses using it as that filter's baseline.
      *
-     * The identity is exact in real arithmetic; the tolerance covers only the reassociation of the
-     * `Float` sum, which can move the rounded channel by one level at a half-way point.
+     * Exact in real arithmetic; the tolerance covers only `Float` reassociation, which can move a
+     * rounded channel by one level at a half-way point.
      */
     @Test
     fun equalsFixedGainDirectionalUnsharpMasking() {
@@ -80,10 +75,9 @@ class LinearUnsharpMaskTest {
     }
 
     /**
-     * The whole reason this baseline exists. Section III of the paper reports that linear UM
-     * amplifies the background noise in smooth areas while the adaptive method does not; here the
-     * adaptive filter returns the noisy input untouched, because a local variance below `tau1` makes
-     * the desired dynamics equal the input's own and the gains never leave zero.
+     * Section III of the paper: linear UM amplifies background noise in smooth areas, the adaptive
+     * method does not. Below `tau1` the desired dynamics equal the input's own, so its gains never
+     * leave zero and the noisy input comes back untouched.
      */
     @Test
     fun amplifiesSmoothNoiseUnlikeTheAdaptiveVariant() {

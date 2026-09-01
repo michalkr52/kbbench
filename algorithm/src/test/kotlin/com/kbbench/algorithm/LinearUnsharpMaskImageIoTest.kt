@@ -14,11 +14,8 @@ import kotlin.test.assertTrue
  * inspection, and puts its numbers next to the adaptive variant's on the same frame — the
  * comparison the linear baseline exists to provide.
  *
- * The PSNR and SSIM reported here are measured against the *input*, so they say how far a filter
- * moved the image, not how good the result is: for a sharpener a lower value means more aggressive,
- * not worse. Ranking enhancement algorithms needs ground truth the input cannot supply — in the app
- * that is the separately loaded reference image, and Section III of the paper declines to give
- * quantitative quality figures at all, falling back on visual inspection.
+ * PSNR and SSIM here are against the *input*: they say how far a filter moved the image, not how
+ * good the result is. For quality scores see [SharpeningRestorationTest].
  */
 class LinearUnsharpMaskImageIoTest {
 

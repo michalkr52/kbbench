@@ -11,17 +11,15 @@ import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.filter.GuidedFilter
 
 /**
- * Single-frame edge-preserving denoising with the guided filter of He, Sun and Tang (ECCV 2010).
+ * Single-frame edge-preserving denoising, He, Sun and Tang (ECCV 2010), Algorithm 1 applied to each
+ * RGB channel with the channel guiding itself. Runs on [AlgorithmInput.frames]`.first()` and
+ * preserves alpha. [GuidedFilter] lists the departures from the paper.
  *
- * Operates on [AlgorithmInput.frames]`.first()`, applying the scalar filter of Algorithm 1 to each
- * RGB channel independently with the channel guiding itself. Flat regions collapse towards the
- * local mean while edges are left close to the input, which is the behaviour described in
- * Section 3.2. Alpha is preserved.
- *
- * @param radius Window half-width in pixels; the window is `(2 * radius + 1)` square.
- * @param eps Regularization in the normalized units of the paper, where intensities lie in `[0, 1]`
- *   (the authors quote values such as `0.1^2`, `0.2^2`, `0.4^2`). Scaled internally to the 8-bit
- *   range so published parameters can be used verbatim. Larger values smooth more aggressively.
+ * @param radius Window half-width in pixels, at least 1; the window is `(2 * radius + 1)` square.
+ * @param eps Regularization in the paper's normalized units, intensities in `[0, 1]` — the authors
+ *   quote `0.1^2`, `0.2^2`, `0.4^2` — scaled internally to the 8-bit range so published values can
+ *   be used verbatim. Must be positive; larger smooths more.
+ * @throws IllegalArgumentException if [radius] or `eps` is out of range.
  */
 class GuidedFilterDenoise(
     private val radius: Int = 4,

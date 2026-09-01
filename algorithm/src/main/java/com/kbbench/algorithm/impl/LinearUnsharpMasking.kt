@@ -12,33 +12,30 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Classical unsharp masking, Eq. (1) and (2) of Polesel, Ramponi and Mathews (IEEE TIP 9(3), 2000).
- *
+ * Classical unsharp masking, Eq. (1) and (2) of Polesel, Ramponi and Mathews (IEEE TIP 9(3), 2000),
+ * with the `lambda = 0.5` of Table I. This is the baseline [AdaptiveUnsharpMasking] is compared
+ * against in Fig. 5(a).
  * ```
  * z(n,m) = 4*x(n,m) - x(n-1,m) - x(n+1,m) - x(n,m-1) - x(n,m+1)
  * y(n,m) = x(n,m) + lambda * z(n,m)
  * ```
+ * Eq. (3) and (4) sum to exactly this `z`, so the adaptive filter is this algorithm with the fixed
+ * gain replaced by an adapted one; running both isolates the contribution of the adaptation.
  *
- * This is the baseline [AdaptiveUnsharpMasking] is measured against — Fig. 5(a) of that paper — and
- * the two are the same filter up to one thing. The directional Laplacians of Eq. (3) and (4) sum to
- * exactly the highpass of Eq. (2), so the adaptive method *is* this algorithm with the fixed gain
- * replaced by one that a Gauss-Newton recursion re-derives at every pixel. Running both over the
- * same frame therefore isolates the contribution of the adaptation and nothing else.
+ * ### Departures from the paper
  *
- * The default gain is the `lambda = 0.5` Table I reports for the paper's own linear-UM comparison.
+ * - The paper processes 8-bit grayscale. Here `z` is computed on luma and the single correction is
+ *   added to R, G and B alike, matching [AdaptiveDirectionalUnsharpMask] so that a benchmark
+ *   comparing the two measures the algorithms rather than differences in their scaffolding.
+ * - Missing border neighbours replicate, so their terms vanish.
  *
- * The luma-driven correction, the replicated border and the rounding all match
- * [com.kbbench.algorithm.filter.AdaptiveDirectionalUnsharpMask] so that a benchmark comparing the
- * two measures the algorithms rather than differences in their scaffolding. Alpha is preserved.
+ * There is no separate `filter/` object because there is no intermediate state to extract. Luma is
+ * held in three rolling rows rather than a full plane, which keeps memory at `O(width)` and computes
+ * each pixel's luma exactly once; recomputing it per tap would quintuple the arithmetic and show up
+ * as a runtime difference unrelated to the algorithm.
  *
- * Unlike the other paper implementations in this module there is no separate `filter/` object,
- * because there would be nothing in it: no intermediate planes, no banding, a single pass. Memory is
- * `O(width)` rather than `O(width * height)` — the Laplacian only ever reaches one row either side,
- * so three rolling rows of luma suffice, and each pixel's luma is computed exactly once. Recomputing
- * it for all five taps instead would need no buffer at all but would quintuple the arithmetic, which
- * on a benchmarking harness would show up as a runtime difference that is not about the algorithm.
- *
- * @param lambda Gain applied to the highpass response. `0` reduces Eq. (1) to `y = x`.
+ * @param lambda Gain applied to the highpass response; `>= 0`, where `0` reduces Eq. (1) to `y = x`.
+ * @throws IllegalArgumentException if [lambda] is negative.
  */
 class LinearUnsharpMasking(
     private val lambda: Double = 0.5,
@@ -75,8 +72,7 @@ class LinearUnsharpMasking(
         val (out, processMs) = measureMs {
             val result = IntArray(src.size)
 
-            // Rows y-1, y and y+1 of the luma plane, rotated as the scan advances. Loading clamps
-            // the row index, which is how the border replication of Eq. (2) is realized vertically.
+            // Rows y-1, y and y+1 of the luma plane, rotated as the scan advances.
             var above = FloatArray(width)
             var current = FloatArray(width)
             var below = FloatArray(width)
@@ -120,6 +116,7 @@ class LinearUnsharpMasking(
         )
     }
 
+    /** Fills [dst] with row [y] of the luma plane; [y] is clamped, which replicates the border. */
     private fun loadLumaRow(src: IntArray, dst: FloatArray, width: Int, height: Int, y: Int) {
         val row = y.coerceIn(0, height - 1) * width
         for (x in 0 until width) {

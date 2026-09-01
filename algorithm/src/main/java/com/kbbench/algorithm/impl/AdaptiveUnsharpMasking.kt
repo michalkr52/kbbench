@@ -11,26 +11,23 @@ import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.filter.AdaptiveDirectionalUnsharpMask
 
 /**
- * Single-frame adaptive unsharp masking after Polesel, Ramponi and Mathews (IEEE TIP 9(3), 2000).
+ * Single-frame adaptive unsharp masking (Polesel, Ramponi, Mathews, IEEE TIP 9(3), 2000).
  *
- * Two directional Laplacians are scaled by gains that a Gauss-Newton recursion adapts per pixel, so
- * that smooth areas are left alone, medium-contrast detail is emphasized most and high-contrast
- * edges only moderately. The whole adaptation runs on luma and the resulting correction is applied
- * to R, G and B alike; alpha is preserved. See [AdaptiveDirectionalUnsharpMask] for the equations.
+ * Equations and departures from the paper are documented on [AdaptiveDirectionalUnsharpMask], which
+ * does the work; this class only validates parameters and reports timing.
  *
- * Defaults are the values Table I reports for the paper's own enhancement experiment. They were
- * tuned on a 256x256 crop of Lena, so [tau1] in particular — which the paper ties directly to the
- * input's noise level, quoting the range `[30, 60]` — may need raising for noisier captures.
+ * Defaults are Table I of the paper, tuned there on a 256x256 crop of Lena. [tau1] tracks the
+ * input's noise level (the paper quotes `[30, 60]`) and may need raising for noisier captures.
  *
- * @param tau1 Local-variance threshold below which a pixel counts as smooth.
- * @param tau2 Local-variance threshold at or above which a pixel counts as high-contrast.
- * @param alphaB Desired dynamics multiplier in smooth areas; `1` means no enhancement.
- * @param alphaDl Multiplier in high-contrast areas.
- * @param alphaDh Multiplier in medium-contrast areas; the largest of the three.
- * @param mu Gauss-Newton step size controlling how fast the gains converge.
- * @param beta Forgetting factor of the autocorrelation recursion.
- * @param maxGain Clamp on either directional gain, bounding the transients the paper describes
- *   when the recursion crosses from a detail zone into a smooth one.
+ * @param tau1 Local-variance threshold below which a pixel counts as smooth; `>= 0`.
+ * @param tau2 Threshold at or above which a pixel counts as high-contrast; must exceed [tau1].
+ * @param alphaB Dynamics multiplier in smooth areas; `>= 1`, where `1` means no enhancement.
+ * @param alphaDl Multiplier in high-contrast areas; must exceed `1`.
+ * @param alphaDh Multiplier in medium-contrast areas; must exceed [alphaDl].
+ * @param mu Gauss-Newton step size, `>= 0`.
+ * @param beta Forgetting factor of the autocorrelation recursion, inside `(0, 1)`.
+ * @param maxGain Clamp on either directional gain; must be positive.
+ * @throws IllegalArgumentException if any parameter falls outside the above.
  */
 class AdaptiveUnsharpMasking(
     private val tau1: Double = 60.0,

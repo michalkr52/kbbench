@@ -10,39 +10,20 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * Scores the sharpeners against ground truth instead of against their own input.
+ * Scores the sharpeners against ground truth: degrade a frame by a known amount, sharpen it, and
+ * compare with the original. PSNR against the algorithm's own input would only say how far it moved
+ * the image, and would always rank the more aggressive filter lower.
  *
- * PSNR taken between an enhancer's output and its input only says how far the filter moved the
- * image; it cannot rank two sharpeners, because the more aggressive one always scores lower. To get
- * a number where higher really is better, the frame is degraded by a known amount, the sharpener is
- * asked to undo it, and the result is scored against the untouched original. The degraded frame's
- * own score is the do-nothing baseline every algorithm has to beat.
+ * Approximates the protocol of Polesel et al. Section III.B; Section III.A of that paper declines to
+ * score enhancement quantitatively at all, since no ideal reference exists.
  *
- * This mirrors what the denoisers get from `GuidedFilterTest.improvesPsnrAgainstCleanReference`,
- * and it is the protocol Polesel et al. approximate in Section III.B, where they preprocess a
- * downsampled block before interpolating it. Section III.A of that paper declines to score the
- * enhancement experiment quantitatively at all, on the grounds that no ideal reference image
- * exists — which is the gap this detour closes, at the cost of measuring restoration of a synthetic
- * degradation rather than enhancement as such.
+ * Uses [loadCleanReferences] when a clean set is installed, otherwise falls back to `input.png` —
+ * a weaker truth, being a real photo whose sensor noise a restoration score rewards reproducing.
  *
- * Runs over [loadCleanReferences] when a clean set is installed, and falls back to the single
- * `input.png` otherwise. The clean set is the better truth: `input.png` is a real photo carrying
- * sensor noise, so its noise-free rows partly reward an algorithm for reproducing that noise.
- *
- * ### What the sweep shows
- *
- * The ranking inverts with the degradation, which is why the table is swept rather than reported at
- * a single operating point:
- *
- * - **Blur alone.** Linear UM wins. It is the closer thing to a deblurring operator, while the
- *   adaptive filter deliberately does nothing where the local variance is low and overshoots where
- *   it is high, so at a mild blur it can score several dB *below* doing nothing.
- * - **Blur plus noise.** The adaptive filter wins by a wide margin, because linear UM amplifies the
- *   added noise along with the detail, while the adaptive one barely moves.
- *
- * One caveat to carry into any write-up: under noise *neither* sharpener beats the do-nothing
- * baseline. PSNR punishes sharpening, which is exactly why the paper fell back on visual inspection.
- * The honest claim is not that the adaptive filter restores better, but that it does far less damage.
+ * The sweep exists because the ranking inverts with the degradation: against blur alone linear UM
+ * wins, and once noise is added the adaptive filter wins by a wide margin. Note that under noise
+ * neither sharpener beats the do-nothing baseline — PSNR punishes sharpening as such, so the claim
+ * the assertions encode is that the adaptive filter does less damage, not that it restores better.
  */
 class SharpeningRestorationTest {
 

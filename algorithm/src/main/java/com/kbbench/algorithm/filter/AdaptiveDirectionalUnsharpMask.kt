@@ -4,87 +4,43 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Adaptive directional unsharp masking (Polesel, Ramponi, Mathews, IEEE TIP 9(3), 2000).
+ * Adaptive directional unsharp masking (A. Polesel, G. Ramponi and V. J. Mathews, "Image enhancement via adaptive unsharp masking").
  *
- * Classical unsharp masking adds a fixed multiple of a highpass response back to the image, which
- * amplifies noise in flat areas and overshoots on strong edges. This method replaces the constant
- * gain with a two-element vector adapted per pixel, so that smooth areas are left alone,
- * medium-contrast detail is emphasized most, and high-contrast edges are only moderately enhanced.
- *
- * ### The correction signal
- *
- * Two one-dimensional Laplacians, Eq. (3) and (4), one per axis:
+ * Equations, with the paper's numbering:
  * ```
- * z_x(n,m) = 2*x(n,m) - x(n,m-1) - x(n,m+1)     // along columns
- * z_y(n,m) = 2*x(n,m) - x(n-1,m) - x(n+1,m)     // along rows
+ * (3) z_x = 2*x(n,m) - x(n,m-1) - x(n,m+1)          directional Laplacians
+ * (4) z_y = 2*x(n,m) - x(n-1,m) - x(n+1,m)
+ * (5) y   = x + A^T Z,   A = [a_x, a_y]^T,  Z = [z_x, z_y]^T
+ * (9) g_y = g_x + A^T G, G = [g(z_x), g(z_y)]^T     g = 3x3 highpass of Fig. 2
+ * (10) v  = 3x3 local variance of x
+ * (12) alpha = alphaB if v < tau1, alphaDh if v < tau2, else alphaDl
+ * (11) g_d = alpha * g_x                            desired local dynamics
+ * (13) e   = g_d - g_y
+ * (16) A(n,m+1) = A(n,m) + 2*mu*e * R^-1(n,m) * G(n,m)
+ * (17) R(n,m)   = (1 - beta) * R(n,m-1) + beta * G(n,m) * G^T(n,m)
  * ```
- * and the output of Eq. (5)/(8) is `y = x + A^T Z`, with `A = [a_x, a_y]^T` the scaling vector and
- * `Z = [z_x, z_y]^T`. The two directions carry separate gains because the eye is anisotropic in its
- * sensitivity to detail of different orientations.
+ * `g` is a linear highpass rather than the local variance one might expect: linearity is what makes
+ * (9) exact for a locally constant `A`, leaving the cost quadratic in `A` with a single minimum.
  *
- * ### Why the activity measure is a linear operator
+ * ### Departures from the paper
  *
- * Local dynamics are measured with [HIGHPASS_CENTER]-weighted 3x3 highpass `g` of Fig. 2, not with a
- * local variance. That choice is what makes the whole scheme tractable: `g` being *linear* means
- * ```
- * g_y = g_x + A^T G,   G = [g(z_x), g(z_y)]^T                          Eq. (9), (14), (15)
- * ```
- * holds exactly for a locally constant `A`, so the error is affine in `A` and the cost `E[e^2]` is a
- * quadratic with a single minimum. A variance-based measure would be quadratic in `A` and lose that.
- *
- * Eq. (14) is the same identity used as a causal *approximation*: the exact `g_y` would need output
- * pixels to the right of and below the current one, whose gains have not been computed yet, so the
- * paper assumes `A` varies slowly and evaluates `g_y` with the gains in hand.
- *
- * ### The target, and where the three-way behaviour comes from
- *
- * A 3x3 local variance, Eq. (10), classifies the pixel, and the desired dynamics are a multiple of
- * the *input's own* dynamics, Eq. (11)/(12):
- * ```
- * g_d = alpha * g_x,   alpha = alphaB  (= 1) if v <  tau1     smooth   -> leave alone
- *                              alphaDh (= 4) if v <  tau2     medium   -> emphasize most
- *                              alphaDl (= 3) otherwise        high     -> emphasize moderately
- * ```
- * Note that no gate multiplies the gains: `alpha = 1` in a flat area means "keep the dynamics as
- * they are", and the adaptation drives the gains to zero there on its own.
- *
- * ### Adaptation
- *
- * Gauss-Newton along a row, Eq. (16) and (17):
- * ```
- * A(n,m+1) = A(n,m) + 2 * mu * e(n,m) * R^-1(n,m) * G(n,m)
- * R(n,m)   = (1 - beta) * R(n,m-1) + beta * G(n,m) * G^T(n,m)
- * ```
- * `R` is a symmetric 2x2, so its inverse is closed-form and costs a single division — matching the
- * paper's quoted budget of nineteen multiplications and one division per output sample.
- *
- * ### Departures from the paper, and why
- *
- * - The paper processes 8-bit grayscale. Here the entire adaptation runs on luma and the single
- *   resulting correction is added to R, G and B alike, which shifts luminance without disturbing the
- *   colour differences. Adapting each channel separately would amplify chroma noise.
- * - The paper says only that `A` "is adapted along the rows" and indexes the update by `m`. This
- *   implementation takes that literally: every row is an independent adaptation run starting from
- *   `A = 0` and `R = I`. Rows are therefore independent, which removes any state crossing a band
- *   boundary and makes banded output identical to whole-image output.
- * - [RIDGE] is added to `R`'s diagonal before inverting. In a flat area `G` vanishes and `R` decays
- *   to zero with it; `R^-1 G` would then be dominated by whatever noise survived. The paper is
- *   silent on this.
- * - Gains are clamped to `[0, maxGain]`. Section III notes transients "while the recursions are
- *   moving from a detail zone to a smooth area" that amplify the input noise; the clamp bounds them.
- * - Border windows shrink rather than being padded, the convention [BoxFilter] already uses, so the
- *   3x3 variance near an edge is normalized by the pixels actually inside the image.
- *
- * All planes are ARGB_8888 packed into [Int] in row-major order, and alpha is preserved.
+ * - The paper processes 8-bit grayscale. Here the adaptation runs on luma and the single correction
+ *   is added to R, G and B alike, so luminance shifts without disturbing the colour differences.
+ *   Adapting each channel separately would amplify chroma noise.
+ * - The paper says only that `A` "is adapted along the rows" and indexes the update by `m`. Taken
+ *   literally here: every row restarts from `A = 0`, `R = I`. Rows are therefore independent, so no
+ *   state crosses a band boundary and banded output equals whole-image output.
+ * - [RIDGE] is added to `R`'s diagonal before inverting; the paper is silent on this. In a flat area
+ *   `G` vanishes and `R` decays with it, leaving `R^-1 G` unbounded.
+ * - Gains are clamped to `[0, maxGain]`, bounding the transients Section III notes "while the
+ *   recursions are moving from a detail zone to a smooth area".
+ * - Border windows shrink rather than being padded, matching [BoxFilter].
  *
  * ### Banding
  *
- * Producing output rows `[y0, y1)` needs `g(z_y)` there, which needs `z_y` on `[y0 - 1, y1 + 1)`,
- * which needs luma on `[y0 - 2, y1 + 2)` — a halo of exactly [HALO] rows, independent of every
- * parameter. That is the widest of the five plane dependencies; `g(x)`, `g(z_x)` and the variance
- * all reach only one row out. Rows inside the halo are computed but never read, so the truncation at
- * a band edge is harmless, and where a band abuts the real image edge the truncation is the intended
- * shrink-window behaviour.
+ * Output rows `[y0, y1)` need `g(z_y)` there, hence `z_y` on `[y0 - 1, y1 + 1)`, hence luma on
+ * `[y0 - 2, y1 + 2)`: a halo of [HALO] rows, independent of every parameter and the widest of the
+ * five plane dependencies. Halo rows are computed but never read.
  */
 object AdaptiveDirectionalUnsharpMask {
 
@@ -104,11 +60,8 @@ object AdaptiveDirectionalUnsharpMask {
     private const val HIGHPASS_CENTER = 8.0f
 
     /**
-     * Diagonal loading of `R` before inversion, in squared intensity units.
-     *
-     * `G` reaches magnitudes in the thousands on real detail, so `R` there is of order `1e6` and up
-     * and this is numerically invisible. It only matters where `G` approaches zero, and there it
-     * bounds `R^-1 G` instead of letting it grow without limit.
+     * Diagonal loading of `R` before inversion, in squared intensity units. Negligible against the
+     * `1e6` and up that `R` reaches on real detail; it only bites where `G` approaches zero.
      */
     private const val RIDGE = 1.0
 
@@ -117,22 +70,20 @@ object AdaptiveDirectionalUnsharpMask {
     private const val LUMA_B = 0.114f
 
     /**
-     * Sharpens [src] and returns a new ARGB_8888 array.
-     *
-     * @param tau1 Variance below which a pixel counts as smooth. Tracks the input's noise level;
-     *   the paper reports values in `[30, 60]` for its 8-bit test material.
-     * @param tau2 Variance at or above which a pixel counts as high-contrast.
-     * @param alphaB Desired dynamics multiplier in smooth areas. The paper fixes this at `1`, i.e.
-     *   no enhancement at all.
+     * @param src ARGB_8888 pixels, row-major, `width * height` entries.
+     * @param tau1 Variance below which a pixel counts as smooth; tracks the input's noise level.
+     *   The paper reports `[30, 60]` for its 8-bit material.
+     * @param tau2 Variance at or above which a pixel counts as high-contrast; must exceed [tau1].
+     * @param alphaB Dynamics multiplier in smooth areas; `>= 1`, fixed at `1` by the paper.
      * @param alphaDl Multiplier in high-contrast areas; must exceed `1`.
-     * @param alphaDh Multiplier in medium-contrast areas; must exceed [alphaDl], which is what makes
-     *   medium-contrast detail the most strongly emphasized.
-     * @param mu Gauss-Newton step size. `0` freezes the gains at zero and turns the filter into a
-     *   pass-through, which is what makes the adaptation's contribution separately observable.
-     * @param beta Forgetting factor of the autocorrelation recursion, strictly inside `(0, 1)`.
-     * @param maxGain Upper clamp on either scaling factor. For reference, the paper's linear-UM
-     *   baseline uses a fixed gain of `0.5`.
+     * @param alphaDh Multiplier in medium-contrast areas; must exceed [alphaDl].
+     * @param mu Gauss-Newton step size, `>= 0`. `0` freezes the gains at zero, making the filter a
+     *   pass-through.
+     * @param beta Forgetting factor of Eq. (17), strictly inside `(0, 1)`.
+     * @param maxGain Upper clamp on either scaling factor; must be positive.
      * @param bandHeight Rows produced per band; `0` picks a value from [TARGET_WORKING_BYTES].
+     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
+     * @throws IllegalArgumentException if the dimensions or any parameter fall outside the above.
      */
     fun sharpen(
         src: IntArray,

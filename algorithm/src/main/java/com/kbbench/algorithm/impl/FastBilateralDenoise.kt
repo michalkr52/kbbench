@@ -11,25 +11,16 @@ import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.filter.BilateralGrid
 
 /**
- * Single-frame edge-preserving denoising with the fast bilateral filter of Paris and Durand
- * (ECCV 2006), included as the baseline the guided filter is usually measured against.
+ * Single-frame edge-preserving denoising, Paris and Durand (ECCV 2006). Runs on
+ * [AlgorithmInput.frames]`.first()` and preserves alpha. [BilateralGrid] carries the construction
+ * and the departures from the paper, colour handling in particular.
  *
- * The bilateral filter averages neighbours weighted by both spatial and intensity proximity, so it
- * smooths within regions and not across edges. Paris and Durand recast it as a linear convolution in
- * a downsampled `(x, y, intensity)` grid, which makes it O(N) and independent of the spatial sigma.
- * See [BilateralGrid] for the construction and for how colour is handled.
- *
- * Worth keeping in mind when comparing against [GuidedFilterDenoise]: both are now linear in pixel
- * count, so the interesting differences are output quality and constant factors rather than
- * asymptotics. The bilateral filter is the method He et al. cite for gradient reversal — halos where
- * a pixel sits in a neighbourhood with few similar pixels — which the guided filter is designed to
- * avoid.
- *
- * @param sigmaSpatial Spatial standard deviation in pixels. Doubles as the grid's spatial sampling
- *   rate, so raising it makes the filter *cheaper*, not costlier.
- * @param sigmaRange Range standard deviation in normalized units, intensities in `[0, 1]`, scaled
- *   internally to the 8-bit range. Comparable to the square root of [GuidedFilterDenoise]'s `eps`:
- *   both set the contrast below which variation counts as noise rather than structure.
+ * @param sigmaSpatial Spatial standard deviation in pixels, strictly positive. Doubles as the
+ *   grid's sampling rate, so raising it makes the filter cheaper rather than costlier.
+ * @param sigmaRange Range standard deviation in the paper's normalized units, intensities in
+ *   `[0, 1]`, scaled internally to the 8-bit range. Must be positive. Comparable to the square root
+ *   of [GuidedFilterDenoise]'s `eps`: both set the contrast below which variation counts as noise.
+ * @throws IllegalArgumentException if either sigma is not positive.
  */
 class FastBilateralDenoise(
     private val sigmaSpatial: Double = 3.0,
