@@ -26,6 +26,8 @@ import com.kbbench.algorithm.base.*
 import com.kbbench.algorithm.impl.AlgorithmRegistry
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
+import com.kbbench.algorithm.preprocessing.LensShadingCorrection
+import com.kbbench.algorithm.preprocessing.ShadingMap
 import com.kbbench.utils.RgbHistogram
 import com.kbbench.utils.calculateRgbHistogram
 import com.kbbench.utils.centerCropAndScale
@@ -471,6 +473,12 @@ class CameraViewModel : ViewModel() {
                     addTarget(reader.surface)
                     if (!isRaw) {
                         applyZoom(this, _zoomLevel.value, chars)
+                    } else {
+                        // RAW_SENSOR is never shading-corrected by the device, so we need the map ourselves.
+                        set(
+                            CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE,
+                            CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON
+                        )
                     }
                     set(CaptureRequest.JPEG_ORIENTATION, computeRelativeRotation(chars))
                 }
@@ -524,12 +532,16 @@ class CameraViewModel : ViewModel() {
                 val referenceMetadata = capturedFrames.first().metadata
                 val wbGains = referenceMetadata.get(CaptureResult.COLOR_CORRECTION_GAINS)
                 val colorMatrix = if (isRaw) cameraToSrgbMatrix(chars, referenceMetadata) else null
+                val shadingMap = if (isRaw) lensShadingMap(referenceMetadata) else null
 
                 // Convert captured frames to display-oriented ARGB pixels for algorithms
                 val rotation = computeRelativeRotation(chars)
                 val decodedFrames = logTimed("decodeToArgb x${capturedFrames.size}") {
                     capturedFrames.map { frame ->
-                        decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern, wbGains, colorMatrix)
+                        decodeToArgb(
+                            frame, whiteLevel, blackLevel, cfaPattern,
+                            wbGains, colorMatrix, shadingMap
+                        )
                     }
                 }
                 val framePixels = logTimed("rotateArgb x${decodedFrames.size}") {
@@ -634,13 +646,25 @@ class CameraViewModel : ViewModel() {
             a[row * 3] * b[col] + a[row * 3 + 1] * b[3 + col] + a[row * 3 + 2] * b[6 + col]
         }
 
+    private fun lensShadingMap(metadata: CaptureResult): ShadingMap? {
+        val map = metadata.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
+        if (map == null) {
+            Log.w("CameraViewModel", "No lens shading map; RAW keeps the lens' corner falloff")
+            return null
+        }
+        val gains = FloatArray(map.rowCount * map.columnCount * 4)
+        map.copyGainFactors(gains, 0)
+        return ShadingMap(gains, map.columnCount, map.rowCount)
+    }
+
     private fun decodeToArgb(
         frame: CombinedResult,
         whiteLevel: Int = 1023,
         blackLevel: Int = 64,
         cfaPattern: Int = CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB,
         whiteBalanceGains: android.hardware.camera2.params.RggbChannelVector? = null,
-        colorMatrix: FloatArray? = null
+        colorMatrix: FloatArray? = null,
+        shadingMap: ShadingMap? = null
     ): Triple<IntArray, Int, Int> {        val image = frame.image
         return if (image.format == ImageFormat.JPEG) {
             val buffer = image.planes[0].buffer
@@ -667,11 +691,15 @@ class CameraViewModel : ViewModel() {
                 whiteLevel = whiteLevel,
                 blackLevel = blackLevel
             )
+            val bayerPattern = CfaPattern.fromId(cfaPattern)
+            if (shadingMap != null) {
+                LensShadingCorrection.applyInPlace(raw, w, h, bayerPattern, shadingMap)
+            }
             // White balance gains and the colour transform are applied inside demosaic (float domain)
             // to avoid re-quantizing already-8-bit values, which produced comb-like histogram spikes.
             // Both are supplied by the caller so every frame of a bracket shares one colour space.
             val pixels = BayerDemosaic.demosaic(
-                raw, w, h, CfaPattern.fromId(cfaPattern),
+                raw, w, h, bayerPattern,
                 rGain = whiteBalanceGains?.red ?: 1f,
                 gGain = whiteBalanceGains?.greenEven ?: 1f,
                 bGain = whiteBalanceGains?.blue ?: 1f,
