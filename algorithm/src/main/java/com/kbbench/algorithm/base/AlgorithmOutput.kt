@@ -8,16 +8,10 @@ package com.kbbench.algorithm.base
  * @property width Output frame width in pixels.
  * @property height Output frame height in pixels.
  * @property totalTime Total processing time of the algorithm, in milliseconds.
- * @property psnr Peak signal-to-noise ratio computed against the first input frame.
- * @property ssim Structural similarity index computed against the first input frame.
  */
 data class AlgorithmOutput(
     val pixels: IntArray,
     val width: Int,
     val height: Int,
     val totalTime: Long,
-    val psnr: Double,
-    val ssim: Double,
 )
-
-

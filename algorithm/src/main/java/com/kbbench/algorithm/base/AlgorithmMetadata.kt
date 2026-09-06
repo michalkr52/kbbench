@@ -52,6 +52,7 @@ data class FrameRequirements(
  * Descriptive metadata exposed by every [ImageAlgorithm] for UI, filtering and validation.
  *
  * @property name Human-readable unique name of the algorithm.
+ * @property kind Short display label describing the algorithm type, such as HDR or SR.
  * @property category Main algorithm family (for example HDR fusion or denoising).
  * @property frameRequirements Requirements describing how many frames and what kind of frames
  *   should be supplied.
@@ -59,9 +60,8 @@ data class FrameRequirements(
  */
 data class AlgorithmMetadata(
     val name: String,
+    val kind: String,
     val category: AlgorithmCategory,
     val frameRequirements: FrameRequirements,
     val description: String,
 )
-
-

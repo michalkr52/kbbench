@@ -7,7 +7,6 @@ import com.kbbench.algorithm.base.AlgorithmOutput
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
-import com.kbbench.algorithm.base.calculateQualityMetrics
 import com.kbbench.algorithm.base.measureMs
 import kotlin.math.exp
 
@@ -24,6 +23,7 @@ import kotlin.math.exp
 class ExposureFusion : ImageAlgorithm {
     override val metadata: AlgorithmMetadata = AlgorithmMetadata(
         name = "ExposureFusion",
+        kind = "HDR",
         category = AlgorithmCategory.HDR_FUSION,
         frameRequirements = FrameRequirements(
             minFrames = 2,
@@ -84,20 +84,11 @@ class ExposureFusion : ImageAlgorithm {
             }
         }
 
-        val qualityMetrics = calculateQualityMetrics(
-            referencePixels = frames.first(),
-            candidatePixels = out,
-        )
-
         return AlgorithmOutput(
             pixels = out,
             width = input.width,
             height = input.height,
             totalTime = processMs,
-            psnr = qualityMetrics.psnr,
-            ssim = qualityMetrics.ssim,
         )
     }
 }
-
-

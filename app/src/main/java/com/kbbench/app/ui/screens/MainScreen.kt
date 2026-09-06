@@ -6,15 +6,20 @@ import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kbbench.app.ui.components.CameraPreview
 import com.kbbench.app.viewmodel.AppScreen
 import com.kbbench.app.viewmodel.CameraViewModel
+import com.kbbench.algorithm.base.AlgorithmMetadata
 import kotlinx.coroutines.delay
 
 @Composable
@@ -49,9 +55,16 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val captureFormat by viewModel.captureFormat.collectAsState()
     val zoomLevel by viewModel.zoomLevel.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
+    val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
+    var showAlgorithmSelector by remember { mutableStateOf(false) }
+
+    val uploadInputLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri -> uri?.let { viewModel.loadInputFromGallery(context, it) } }
+    )
 
     // Hide focus indicator after a short delay
     LaunchedEffect(focusTapPosition) {
@@ -90,123 +103,221 @@ fun CameraScreen(viewModel: CameraViewModel) {
         if (hasCameraPermission) {
             val isRaw = captureFormat == ImageFormat.RAW_SENSOR
             val previewSize by viewModel.previewSize.collectAsState()
+            val controlsEnabled = !isProcessing
 
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { offset ->
-                                focusTapPosition = offset
-                                viewModel.focusAt(offset.x, offset.y, size.width, size.height)
-                            }
-                        )
-                    }
-                    .then(
-                        if (!isRaw) {
-                            Modifier.pointerInput(Unit) {
-                                detectTransformGestures { _, _, zoom, _ ->
-                                    viewModel.setZoom(zoom)
-                                }
-                            }
-                        } else Modifier
-                    )
             ) {
-                CameraPreview(
-                    modifier = Modifier.fillMaxSize(),
-                    previewWidth = previewSize?.width ?: 0,
-                    previewHeight = previewSize?.height ?: 0,
-                    onSurfaceCreated = { surface ->
-                        lastSurface = surface
-                        viewModel.initialize(context)
-                        viewModel.startPreview(context, surface)
-                    }
-                )
+                // Camera preview / loaded image, aligned to the top and sized to its own aspect ratio
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { offset ->
+                                    if (controlsEnabled) {
+                                        focusTapPosition = offset
+                                        viewModel.focusAt(offset.x, offset.y, size.width, size.height)
+                                    }
+                                }
+                            )
+                        }
+                        .then(
+                            if (!isRaw) {
+                                Modifier.pointerInput(Unit) {
+                                    detectTransformGestures { _, _, zoom, _ ->
+                                        if (controlsEnabled) {
+                                            viewModel.setZoom(zoom)
+                                        }
+                                    }
+                                }
+                            } else Modifier
+                        )
+                ) {
+                    CameraPreview(
+                        modifier = Modifier.fillMaxWidth(),
+                        previewWidth = previewSize?.width ?: 0,
+                        previewHeight = previewSize?.height ?: 0,
+                        onSurfaceCreated = { surface ->
+                            lastSurface = surface
+                            viewModel.initialize(context)
+                            viewModel.startPreview(context, surface)
+                        }
+                    )
 
-                // Focus indicator
-                val focusPos = focusTapPosition
-                if (focusPos != null) {
-                    val indicatorSizeDp = 48.dp
-                    val indicatorSizePx = with(LocalDensity.current) { indicatorSizeDp.toPx() }
-                    AnimatedVisibility(
-                        visible = showFocusIndicator,
-                        enter = fadeIn(),
-                        exit = fadeOut()
-                    ) {
+                    // Focus indicator
+                    val focusPos = focusTapPosition
+                    if (focusPos != null) {
+                        val indicatorSizeDp = 48.dp
+                        val indicatorSizePx = with(LocalDensity.current) { indicatorSizeDp.toPx() }
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = showFocusIndicator,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .offset {
+                                        IntOffset(
+                                            (focusPos.x - indicatorSizePx / 2).toInt(),
+                                            (focusPos.y - indicatorSizePx / 2).toInt()
+                                        )
+                                    }
+                                    .size(indicatorSizeDp)
+                                    .border(2.dp, Color.White)
+                            )
+                        }
+                    }
+
+                    // Zoom Level Indicator
+                    if (!isRaw && zoomLevel > 1f) {
                         Box(
                             modifier = Modifier
-                                .offset {
-                                    IntOffset(
-                                        (focusPos.x - indicatorSizePx / 2).toInt(),
-                                        (focusPos.y - indicatorSizePx / 2).toInt()
-                                    )
-                                }
-                                .size(indicatorSizeDp)
-                                .border(2.dp, Color.White)
-                        )
+                                .matchParentSize()
+                                .padding(top = 16.dp),
+                            contentAlignment = Alignment.TopCenter
+                        ) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.5f),
+                                shape = CircleShape
+                            ) {
+                                Text(
+                                    text = "%.1fx".format(zoomLevel),
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
+                    }
+
+                    // Spinning loader shown while a captured/loaded image is being processed
+                    Box(
+                        modifier = Modifier.matchParentSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isProcessing) {
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .background(MaterialTheme.colorScheme.background.copy(alpha=0.5f))
+                            )
+                        }
+
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = isProcessing,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.5f),
+                                shape = CircleShape
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .padding(16.dp)
+                                        .size(40.dp),
+                                    color = Color.White
+                                )
+                            }
+                        }
                     }
                 }
 
-                // Zoom Level Indicator
-                if (!isRaw && zoomLevel > 1f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = 16.dp),
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.5f),
-                            shape = CircleShape
+                // Controls occupy the remaining space below the image and are centered within it
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(
+                            modifier = Modifier.padding(bottom = 32.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { showAlgorithmSelector = true },
+                                enabled = !isProcessing,
+                                modifier = Modifier
+                                    .padding(end = 24.dp)
+                                    .size(56.dp)
+                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Tune,
+                                    contentDescription = "Select algorithms",
+                                    tint = Color.White
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    uploadInputLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                enabled = !isProcessing,
+                                modifier = Modifier
+                                    .padding(end = 24.dp)
+                                    .size(56.dp)
+                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PhotoLibrary,
+                                    contentDescription = "Load input image",
+                                    tint = Color.White
+                                )
+                            }
+
+                            Button(
+                                onClick = { viewModel.takePhoto(context) },
+                                modifier = Modifier.size(80.dp),
+                                shape = CircleShape,
+                                enabled = !isProcessing
+                            ) {
+                                // Empty content for now
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "%.1fx".format(zoomLevel),
+                                text = "Capture format",
                                 color = Color.White,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                style = MaterialTheme.typography.labelLarge
+                                modifier = Modifier.weight(1f)
                             )
-                        }
-                    }
-                }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                val formats = listOf(
+                                    "JPEG" to ImageFormat.JPEG,
+                                    "RAW" to ImageFormat.RAW_SENSOR
+                                )
+                                formats.forEach { (name, format) ->
+                                    FilterChip(
+                                        selected = captureFormat == format,
+                                        onClick = {
+                                            if (controlsEnabled) {
+                                                viewModel.setCaptureFormat(format)
+                                                lastSurface?.let { viewModel.startPreview(context, it) }
+                                            }
+                                        },
+                                        enabled = controlsEnabled,
+                                        label = { Text(name) },
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                }
+                            }
 
-                // Format Toggle and Shutter
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Bottom
-                ) {
-                    Row(
-                        modifier = Modifier.padding(bottom = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Format: ", color = Color.White)
-                        val formats = listOf(
-                            "JPEG" to ImageFormat.JPEG,
-                            "RAW" to ImageFormat.RAW_SENSOR
-                        )
-                        formats.forEach { (name, format) ->
-                            FilterChip(
-                                selected = captureFormat == format,
-                                onClick = {
-                                    viewModel.setCaptureFormat(format)
-                                    lastSurface?.let { viewModel.startPreview(context, it) }
-                                },
-                                label = { Text(name) },
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            )
                         }
-                    }
-
-                    Button(
-                        onClick = { viewModel.takePhoto(context) },
-                        modifier = Modifier.size(80.dp),
-                        shape = CircleShape,
-                        enabled = !isProcessing
-                    ) {
-                        // Empty content for now
                     }
                 }
             }
@@ -219,4 +330,75 @@ fun CameraScreen(viewModel: CameraViewModel) {
             }
         }
     }
+
+    if (showAlgorithmSelector) {
+        AlgorithmSelectorDialog(
+            algorithms = viewModel.availableAlgorithms.map { it.metadata },
+            enabledAlgorithmNames = enabledAlgorithmNames,
+            onAlgorithmEnabledChanged = viewModel::setAlgorithmEnabled,
+            onAllAlgorithmsEnabledChanged = viewModel::setAllAlgorithmsEnabled,
+            onDismiss = { showAlgorithmSelector = false }
+        )
+    }
+}
+
+@Composable
+private fun AlgorithmSelectorDialog(
+    algorithms: List<AlgorithmMetadata>,
+    enabledAlgorithmNames: Set<String>,
+    onAlgorithmEnabledChanged: (String, Boolean) -> Unit,
+    onAllAlgorithmsEnabledChanged: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val allEnabled = algorithms.isNotEmpty() &&
+        algorithms.all { it.name in enabledAlgorithmNames }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Algorithms") },
+        text = {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("All algorithms", modifier = Modifier.weight(1f))
+                    Checkbox(
+                        checked = allEnabled,
+                        onCheckedChange = onAllAlgorithmsEnabledChanged
+                    )
+                }
+                HorizontalDivider()
+                algorithms.forEach { algorithm ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = algorithm.name,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = algorithm.kind,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Checkbox(
+                            checked = algorithm.name in enabledAlgorithmNames,
+                            onCheckedChange = { enabled ->
+                                onAlgorithmEnabledChanged(algorithm.name, enabled)
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Done")
+            }
+        }
+    )
 }
