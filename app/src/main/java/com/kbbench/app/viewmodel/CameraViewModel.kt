@@ -12,6 +12,7 @@ import androidx.core.content.FileProvider
 import androidx.exifinterface.media.ExifInterface
 import android.media.ImageReader
 import android.net.Uri
+import android.os.Debug
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -95,12 +96,10 @@ data class BenchmarkResult(
 /** A user-supplied ground-truth image to score algorithm outputs against. */
 data class ReferenceImage(val bitmap: Bitmap, val displayPath: String)
 
-/** Raw output of one algorithm run, kept in memory to rescoring without re-running the algorithm. */
+/** Locates one algorithm run's persisted PNG so it can be rescored without re-running the algorithm. */
 private data class AlgorithmOutputRecord(
     val id: String,
-    val pixels: IntArray,
-    val width: Int,
-    val height: Int,
+    val imagePath: String,
     val runtimeMs: Long,
 )
 
@@ -147,6 +146,14 @@ class CameraViewModel : ViewModel() {
         val result = block()
         Log.d("Perf", "$label: ${System.currentTimeMillis() - start} ms")
         return result
+    }
+
+    private fun logMemory(label: String) {
+        val runtime = Runtime.getRuntime()
+        val usedHeapMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
+        val maxHeapMb = runtime.maxMemory() / (1024 * 1024)
+        val nativeHeapMb = Debug.getNativeHeapAllocatedSize() / (1024 * 1024)
+        Log.d("Perf", "$label memory: heap=${usedHeapMb}MB/${maxHeapMb}MB native=${nativeHeapMb}MB")
     }
 
     private val algorithmRegistry = AlgorithmRegistry()
@@ -759,9 +766,8 @@ class CameraViewModel : ViewModel() {
         val outputRecords = mutableListOf<AlgorithmOutputRecord>()
         val artifacts = mutableListOf<ExportImageArtifact>()
         val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
-        // PNG encoding is CPU-bound; defer all of it until every algo.process() call below has
-        // finished so encoding never runs concurrently with (and skews) a benchmarked algorithm.
         val saveJobs = mutableListOf<Deferred<Unit>>()
+        logMemory("benchmark start")
 
         val preprocessedFiles = frames.mapIndexed { index, pixels ->
             val preprocessedFile = File(
@@ -818,7 +824,7 @@ class CameraViewModel : ViewModel() {
             }
         }
 
-        val pendingOutputSaves = mutableListOf<Triple<String, File, AlgorithmOutput>>()
+        val pendingOutputSaves = mutableListOf<Triple<String, File, Bitmap>>()
 
         for (algo in algorithms) {
             val minFrames = algo.metadata.frameRequirements.minFrames
@@ -851,6 +857,11 @@ class CameraViewModel : ViewModel() {
 
             try {
                 val output = logTimed("algo.process(${algo.name})") { algo.process(input) }
+                require(output.pixels.size == output.width * output.height) {
+                    "${algo.name} returned ${output.pixels.size} pixels for ${output.width}x${output.height}"
+                }
+                Log.d("Perf", "algo.output(${algo.name}): ${output.width}x${output.height}, ${output.pixels.size} pixels")
+                logMemory("after algo.process(${algo.name})")
                 val id = algo.name.lowercase(Locale.US)
 
                 // File path/artifact are known synchronously; the actual PNG encode is deferred
@@ -866,9 +877,14 @@ class CameraViewModel : ViewModel() {
                         height = output.height,
                     )
                 )
-                pendingOutputSaves.add(Triple(algo.name, outFile, output))
+                // Copy pixels into a Bitmap now: on API 26+ bitmap pixel data lives in the native
+                // heap, so retained outputs stop counting against the per-app Java heap limit that
+                // 12.5MP IntArrays exhausted once several algorithms were enabled.
+                val outBitmap = Bitmap.createBitmap(output.width, output.height, Bitmap.Config.ARGB_8888)
+                outBitmap.setPixels(output.pixels, 0, output.width, 0, 0, output.width, output.height)
+                pendingOutputSaves.add(Triple(algo.name, outFile, outBitmap))
 
-                outputRecords.add(AlgorithmOutputRecord(id, output.pixels, output.width, output.height, output.totalTime))
+                outputRecords.add(AlgorithmOutputRecord(id, outFile.absolutePath, output.totalTime))
                 results.add(BenchmarkResult(
                     id = id,
                     title = algo.name,
@@ -889,7 +905,7 @@ class CameraViewModel : ViewModel() {
             }
         }
 
-        // All algo.process() calls are done now; encode/write every PNG concurrently.
+        logMemory("before PNG saves (${preprocessedFiles.size} inputs, ${pendingOutputSaves.size} outputs)")
         preprocessedFiles.forEachIndexed { index, preprocessedFile ->
             val pixels = frames[index]
             saveJobs += async(Dispatchers.Default) {
@@ -898,21 +914,25 @@ class CameraViewModel : ViewModel() {
                 }
             }
         }
-        pendingOutputSaves.forEach { (algoName, outFile, output) ->
+        pendingOutputSaves.forEach { (algoName, outFile, bitmap) ->
             saveJobs += async(Dispatchers.Default) {
-                val bitmap = Bitmap.createBitmap(output.width, output.height, Bitmap.Config.ARGB_8888)
-                bitmap.setPixels(output.pixels, 0, output.width, 0, 0, output.width, output.height)
-                logTimed("PNG save output($algoName) (${output.width}x${output.height})") {
-                    FileOutputStream(outFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                try {
+                    logTimed("PNG save output($algoName) (${bitmap.width}x${bitmap.height})") {
+                        FileOutputStream(outFile).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    }
+                } finally {
+                    bitmap.recycle()
                 }
-                bitmap.recycle()
+                Unit
             }
         }
         logTimedSuspend("await PNG save jobs x${saveJobs.size}") { saveJobs.awaitAll() }
+        logMemory("after PNG saves")
 
         lastAlgorithmOutputs = outputRecords
         exportImageArtifacts = artifacts
         _benchmarkResults.value = results
+        Log.d("Perf", "benchmark results published (${results.size} tiles)")
         refreshHistograms(results)
     }
 
@@ -1083,7 +1103,7 @@ class CameraViewModel : ViewModel() {
             .map { result ->
                 val record = lastAlgorithmOutputs.find { it.id == result.id }
                 if (record != null) {
-                    result.copy(metrics = metricsFor(record.runtimeMs, record.pixels, record.width, record.height))
+                    result.copy(metrics = metricsFor(record.runtimeMs, record.imagePath))
                 } else {
                     result
                 }
@@ -1131,8 +1151,17 @@ class CameraViewModel : ViewModel() {
         }
     }
 
-    private fun metricsFor(runtimeMs: Long, pixels: IntArray, width: Int, height: Int): BenchmarkMetrics = logTimed("metricsFor (${width}x$height)") {
+    // Candidate pixels are reloaded from the losslessly persisted PNG rather than retained in memory.
+    private fun metricsFor(runtimeMs: Long, imagePath: String): BenchmarkMetrics = logTimed("metricsFor ($imagePath)") {
         val reference = _referenceImage.value ?: return@logTimed BenchmarkMetrics(runtimeMs = runtimeMs)
+        val candidate = logTimed("  decode candidate") { BitmapFactory.decodeFile(imagePath) }
+            ?: return@logTimed BenchmarkMetrics(runtimeMs = runtimeMs)
+        val width = candidate.width
+        val height = candidate.height
+        val pixels = IntArray(width * height)
+        candidate.getPixels(pixels, 0, width, 0, 0, width, height)
+        candidate.recycle()
+
         val referenceBitmap = logTimed("  decode reference") { BitmapFactory.decodeFile(reference.displayPath) }
             ?: return@logTimed BenchmarkMetrics(runtimeMs = runtimeMs)
         val aligned = logTimed("  centerCropAndScale") { centerCropAndScale(referenceBitmap, width, height) }
