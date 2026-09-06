@@ -33,10 +33,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kbbench.app.ui.components.AlgorithmSelectorDialog
 import com.kbbench.app.ui.components.CameraPreview
 import com.kbbench.app.viewmodel.AppScreen
 import com.kbbench.app.viewmodel.CameraViewModel
-import com.kbbench.algorithm.base.AlgorithmMetadata
 import kotlinx.coroutines.delay
 
 @Composable
@@ -56,6 +56,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val zoomLevel by viewModel.zoomLevel.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
     val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
+    val algorithmParameters by viewModel.algorithmParameters.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
@@ -335,70 +336,15 @@ fun CameraScreen(viewModel: CameraViewModel) {
         AlgorithmSelectorDialog(
             algorithms = viewModel.availableAlgorithms.map { it.metadata },
             enabledAlgorithmNames = enabledAlgorithmNames,
+            parameterValues = algorithmParameters,
             onAlgorithmEnabledChanged = viewModel::setAlgorithmEnabled,
             onAllAlgorithmsEnabledChanged = viewModel::setAllAlgorithmsEnabled,
+            onParameterChanged = viewModel::setAlgorithmParameter,
+            onParameterCommit = viewModel::commitAlgorithmParameters,
+            onResetParameters = viewModel::resetAlgorithmParameters,
+            confirmLabel = "Done",
+            onConfirm = { showAlgorithmSelector = false },
             onDismiss = { showAlgorithmSelector = false }
         )
     }
-}
-
-@Composable
-private fun AlgorithmSelectorDialog(
-    algorithms: List<AlgorithmMetadata>,
-    enabledAlgorithmNames: Set<String>,
-    onAlgorithmEnabledChanged: (String, Boolean) -> Unit,
-    onAllAlgorithmsEnabledChanged: (Boolean) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val allEnabled = algorithms.isNotEmpty() &&
-        algorithms.all { it.name in enabledAlgorithmNames }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Algorithms") },
-        text = {
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("All algorithms", modifier = Modifier.weight(1f))
-                    Checkbox(
-                        checked = allEnabled,
-                        onCheckedChange = onAllAlgorithmsEnabledChanged
-                    )
-                }
-                HorizontalDivider()
-                algorithms.forEach { algorithm ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = algorithm.name,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            Text(
-                                text = algorithm.kind,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Checkbox(
-                            checked = algorithm.name in enabledAlgorithmNames,
-                            onCheckedChange = { enabled ->
-                                onAlgorithmEnabledChanged(algorithm.name, enabled)
-                            }
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Done")
-            }
-        }
-    )
 }

@@ -4,10 +4,12 @@ import com.kbbench.algorithm.base.AlgorithmCategory
 import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
+import com.kbbench.algorithm.base.AlgorithmParameter
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
+import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.filter.BilateralGrid
 
 /**
@@ -48,6 +50,31 @@ class FastBilateralDenoise(
             inputFrameType = InputFrameType.SINGLE,
         ),
         description = "Single-frame bilateral denoising approximated on a downsampled bilateral grid.",
+        parameters = listOf(
+            AlgorithmParameter(
+                id = "sigmaSpatial",
+                label = "Spatial sigma",
+                default = 16.0,
+                min = 2.0,
+                max = 64.0,
+                step = 1.0,
+                description = "Kernel width in pixels; raising it blurs a wider area and runs faster.",
+            ),
+            AlgorithmParameter(
+                id = "sigmaRange",
+                label = "Range sigma",
+                default = 0.1,
+                min = 0.01,
+                max = 0.5,
+                step = 0.01,
+                description = "Contrast difference treated as noise; raising it blurs across stronger edges.",
+            ),
+        ),
+    )
+
+    override fun withParameters(values: Map<String, Double>): ImageAlgorithm = FastBilateralDenoise(
+        sigmaSpatial = metadata.parameters.resolve(values, "sigmaSpatial"),
+        sigmaRange = metadata.parameters.resolve(values, "sigmaRange"),
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {

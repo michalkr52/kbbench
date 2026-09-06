@@ -28,12 +28,14 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -46,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kbbench.app.viewmodel.BenchmarkResult
 import com.kbbench.app.viewmodel.CameraViewModel
+import com.kbbench.app.ui.components.AlgorithmSelectorDialog
 import com.kbbench.app.ui.components.HistogramOverlay
 import com.kbbench.app.ui.components.HistogramToolbar
 import com.kbbench.utils.RgbHistogram
@@ -68,7 +71,12 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var showExportDialog by remember { mutableStateOf(false) }
     var exportAsZip by remember { mutableStateOf(false) }
     var showMetricsTable by remember { mutableStateOf(false) }
+    var showAlgorithmSelector by remember { mutableStateOf(false) }
     val histograms by viewModel.histograms.collectAsState()
+    val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
+    val algorithmParameters by viewModel.algorithmParameters.collectAsState()
+    val canRerun by viewModel.canRerun.collectAsState()
+    val isProcessing by viewModel.isProcessing.collectAsState()
 
     val loadReferenceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -145,6 +153,17 @@ fun ResultScreen(viewModel: CameraViewModel) {
                             )
                         }
                     } else if (selectedIndex == null && !isSelectingForCompare) {
+                        if (canRerun && !showMetricsTable) {
+                            IconButton(
+                                onClick = { showAlgorithmSelector = true },
+                                enabled = !isProcessing
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Adjust parameters and re-run"
+                                )
+                            }
+                        }
                         if (referenceImage != null && !showMetricsTable) {
                             IconButton(onClick = { showMetricsTable = true }) {
                                 Icon(
@@ -299,6 +318,38 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 }
             }
         )
+    }
+
+    if (showAlgorithmSelector) {
+        AlgorithmSelectorDialog(
+            algorithms = viewModel.availableAlgorithms.map { it.metadata },
+            enabledAlgorithmNames = enabledAlgorithmNames,
+            parameterValues = algorithmParameters,
+            onAlgorithmEnabledChanged = viewModel::setAlgorithmEnabled,
+            onAllAlgorithmsEnabledChanged = viewModel::setAllAlgorithmsEnabled,
+            onParameterChanged = viewModel::setAlgorithmParameter,
+            onParameterCommit = viewModel::commitAlgorithmParameters,
+            onResetParameters = viewModel::resetAlgorithmParameters,
+            confirmLabel = "Re-run",
+            onConfirm = {
+                showAlgorithmSelector = false
+                selectedIndex = null
+                compareIndices = null
+                viewModel.rerunBenchmarks(context)
+            },
+            onDismiss = { showAlgorithmSelector = false }
+        )
+    }
+
+    if (isProcessing) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
     }
 }
 
@@ -777,6 +828,13 @@ fun ResultFullscreenView(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Metrics", style = MaterialTheme.typography.titleMedium)
+                    currentResult.subtitle?.let { subtitle ->
+                        Text(
+                            text = subtitle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                     currentResult.inputFrameDescription()?.let { description ->
                         Text(
                             text = description,

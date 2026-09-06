@@ -20,10 +20,12 @@ import android.view.OrientationEventListener
 import android.view.OrientationEventListener.ORIENTATION_UNKNOWN
 import android.view.Surface
 import android.webkit.MimeTypeMap
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kbbench.algorithm.base.*
 import com.kbbench.algorithm.impl.AlgorithmRegistry
+import com.kbbench.app.settings.BenchmarkSettingsStore
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.LensShadingCorrection
@@ -103,6 +105,7 @@ private data class AlgorithmOutputRecord(
     val id: String,
     val imagePath: String,
     val runtimeMs: Long,
+    val parameters: Map<String, Double> = emptyMap(),
 )
 
 private data class CaptureMetadata(
@@ -132,7 +135,22 @@ private data class PersistedPickedImage(
     val sourceFormat: String,
 )
 
-class CameraViewModel : ViewModel() {
+/** Everything needed to re-execute algorithms on an already prepared capture. */
+private data class LastRunInput(
+    val originalFilePath: String,
+    val originalDisplayRotation: Int,
+    val preprocessedPaths: List<String>,
+    val width: Int,
+    val height: Int,
+    val exposureTimes: List<Long>,
+    val isoValues: List<Int>,
+    val captureTimeMs: Long,
+    val captureMetadata: CaptureMetadata,
+)
+
+class CameraViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val settingsStore = BenchmarkSettingsStore(application)
 
     /** Temporary profiling helper: logs wall-clock time of [block] under the "Perf" tag. */
     private inline fun <T> logTimed(label: String, block: () -> T): T {
@@ -160,22 +178,71 @@ class CameraViewModel : ViewModel() {
 
     private val algorithmRegistry = AlgorithmRegistry()
     val availableAlgorithms: List<ImageAlgorithm> = algorithmRegistry.getAll()
+    private val availableAlgorithmNames: Set<String> = availableAlgorithms.map { it.name }.toSet()
 
-    private val _enabledAlgorithmNames = MutableStateFlow(availableAlgorithms.map { it.name }.toSet())
+    private val _enabledAlgorithmNames = MutableStateFlow(loadEnabledAlgorithmNames())
     val enabledAlgorithmNames = _enabledAlgorithmNames.asStateFlow()
 
+    /** Non-default parameter overrides: algorithm name -> parameter id -> value. */
+    private val _algorithmParameters = MutableStateFlow(loadAlgorithmParameters())
+    val algorithmParameters = _algorithmParameters.asStateFlow()
+
+    private fun loadEnabledAlgorithmNames(): Set<String> {
+        val saved = settingsStore.loadEnabledAlgorithms()?.intersect(availableAlgorithmNames)
+        return if (saved.isNullOrEmpty()) availableAlgorithmNames else saved
+    }
+
+    private fun loadAlgorithmParameters(): Map<String, Map<String, Double>> =
+        settingsStore.loadAlgorithmParameters()
+            .filterKeys { it in availableAlgorithmNames }
+            .mapValues { (algorithmName, values) ->
+                val declared = algorithmRegistry.getByName(algorithmName).metadata.parameters
+                values.filterKeys { id -> declared.any { it.id == id } }
+            }
+            .filterValues { it.isNotEmpty() }
+
     fun setAlgorithmEnabled(name: String, enabled: Boolean) {
-        if (name !in availableAlgorithms.map { it.name }) return
+        if (name !in availableAlgorithmNames) return
         _enabledAlgorithmNames.value = if (enabled) {
             _enabledAlgorithmNames.value + name
         } else {
             _enabledAlgorithmNames.value - name
         }
+        settingsStore.saveEnabledAlgorithms(_enabledAlgorithmNames.value)
     }
 
     fun setAllAlgorithmsEnabled(enabled: Boolean) {
-        _enabledAlgorithmNames.value = if (enabled) availableAlgorithms.map { it.name }.toSet() else emptySet()
+        _enabledAlgorithmNames.value = if (enabled) availableAlgorithmNames else emptySet()
+        settingsStore.saveEnabledAlgorithms(_enabledAlgorithmNames.value)
     }
+
+    /**
+     * Updates one tuning value in memory. Persisting is deferred to [commitAlgorithmParameters] so a
+     * slider drag does not write once per frame.
+     */
+    fun setAlgorithmParameter(algorithmName: String, parameterId: String, value: Double) {
+        val declared = availableAlgorithms.find { it.name == algorithmName }
+            ?.metadata?.parameters?.firstOrNull { it.id == parameterId } ?: return
+        val clamped = value.coerceIn(declared.min, declared.max)
+        val current = _algorithmParameters.value
+        val updated = current[algorithmName].orEmpty() + (parameterId to clamped)
+        _algorithmParameters.value = current + (algorithmName to updated)
+    }
+
+    fun commitAlgorithmParameters() {
+        settingsStore.saveAlgorithmParameters(_algorithmParameters.value)
+    }
+
+    fun resetAlgorithmParameters(algorithmName: String) {
+        _algorithmParameters.value = _algorithmParameters.value - algorithmName
+        commitAlgorithmParameters()
+    }
+
+    /** Effective tuning values for [algorithm]: declared defaults with the user's overrides applied. */
+    private fun effectiveParameters(algorithm: ImageAlgorithm): Map<String, Double> =
+        algorithm.metadata.parameters.effectiveValues(
+            _algorithmParameters.value[algorithm.name].orEmpty()
+        )
 
     private fun getEnabledAlgorithms(): List<ImageAlgorithm> =
         availableAlgorithms.filter { it.name in _enabledAlgorithmNames.value }
@@ -196,6 +263,11 @@ class CameraViewModel : ViewModel() {
     val referenceImage = _referenceImage.asStateFlow()
 
     private var lastAlgorithmOutputs: List<AlgorithmOutputRecord> = emptyList()
+
+    private var lastRunInput: LastRunInput? = null
+
+    private val _canRerun = MutableStateFlow(false)
+    val canRerun = _canRerun.asStateFlow()
 
     private val _benchmarkResults = MutableStateFlow<List<BenchmarkResult>>(emptyList())
     val benchmarkResults = _benchmarkResults.asStateFlow()
@@ -243,6 +315,7 @@ class CameraViewModel : ViewModel() {
 
     fun setCaptureFormat(format: Int) {
         _captureFormat.value = format
+        settingsStore.saveCaptureFormat(format)
         if (format == ImageFormat.RAW_SENSOR) {
             _zoomLevel.value = 1f
         }
@@ -281,8 +354,14 @@ class CameraViewModel : ViewModel() {
             val capabilities = characteristics?.get(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES
             )
-            if (CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in (capabilities ?: intArrayOf())) {
-                _captureFormat.value = ImageFormat.RAW_SENSOR
+            val supportsRaw =
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in (capabilities ?: intArrayOf())
+            val saved = settingsStore.loadCaptureFormat()
+            _captureFormat.value = when {
+                saved == ImageFormat.RAW_SENSOR && supportsRaw -> ImageFormat.RAW_SENSOR
+                saved == ImageFormat.JPEG -> ImageFormat.JPEG
+                supportsRaw -> ImageFormat.RAW_SENSOR
+                else -> ImageFormat.JPEG
             }
             hasInitializedCaptureFormat = true
         }
@@ -847,7 +926,8 @@ class CameraViewModel : ViewModel() {
         isoValues: List<Int>,
         captureTimeMs: Long,
         originalDisplayRotation: Int,
-        captureMetadata: CaptureMetadata
+        captureMetadata: CaptureMetadata,
+        reusePreprocessedPaths: List<String>? = null
     ) = coroutineScope {
         Log.d("CameraViewModel", "Running ${algorithms.size} algorithms on ${frames.size} frame(s)")
 
@@ -858,11 +938,11 @@ class CameraViewModel : ViewModel() {
         val saveJobs = mutableListOf<Deferred<Unit>>()
         logMemory("benchmark start")
 
-        val preprocessedFiles = frames.mapIndexed { index, pixels ->
-            val preprocessedFile = File(
-                context.filesDir,
-                "PREPROCESSED_${timestamp}_$index.png"
-            )
+        // A re-run points at the PNGs the first run already wrote: re-encoding them costs seconds
+        // per frame at full sensor resolution and would produce byte-identical files.
+        val preprocessedFiles = frames.indices.map { index ->
+            val preprocessedFile = reusePreprocessedPaths?.getOrNull(index)?.let { File(it) }
+                ?: File(context.filesDir, "PREPROCESSED_${timestamp}_$index.png")
             artifacts.add(
                 ExportImageArtifact(
                     id = "image_preprocessed_$index",
@@ -945,7 +1025,12 @@ class CameraViewModel : ViewModel() {
             )
 
             try {
-                val output = logTimed("algo.process(${algo.name})") { algo.process(input) }
+                // Constructed inside the try so an out-of-range tuning combination surfaces as a
+                // failed tile rather than taking down the whole run.
+                val overrides = _algorithmParameters.value[algo.name].orEmpty()
+                val effective = algo.metadata.parameters.effectiveValues(overrides)
+                val configured = algo.withParameters(overrides)
+                val output = logTimed("algo.process(${algo.name})") { configured.process(input) }
                 require(output.pixels.size == output.width * output.height) {
                     "${algo.name} returned ${output.pixels.size} pixels for ${output.width}x${output.height}"
                 }
@@ -973,10 +1058,11 @@ class CameraViewModel : ViewModel() {
                 outBitmap.setPixels(output.pixels, 0, output.width, 0, 0, output.width, output.height)
                 pendingOutputSaves.add(Triple(algo.name, outFile, outBitmap))
 
-                outputRecords.add(AlgorithmOutputRecord(id, outFile.absolutePath, output.totalTime))
+                outputRecords.add(AlgorithmOutputRecord(id, outFile.absolutePath, output.totalTime, effective))
                 results.add(BenchmarkResult(
                     id = id,
                     title = algo.name,
+                    subtitle = describeOverrides(algo, overrides),
                     imagePath = outFile.absolutePath,
                     inputFrameIndices = inputFrameIndices,
                     metrics = BenchmarkMetrics(runtimeMs = output.totalTime)
@@ -995,11 +1081,13 @@ class CameraViewModel : ViewModel() {
         }
 
         logMemory("before PNG saves (${preprocessedFiles.size} inputs, ${pendingOutputSaves.size} outputs)")
-        preprocessedFiles.forEachIndexed { index, preprocessedFile ->
-            val pixels = frames[index]
-            saveJobs += async(Dispatchers.Default) {
-                logTimed("saveArgbPng preprocessed[$index] (${width}x$height)") {
-                    saveArgbPng(preprocessedFile, pixels, width, height)
+        if (reusePreprocessedPaths == null) {
+            preprocessedFiles.forEachIndexed { index, preprocessedFile ->
+                val pixels = frames[index]
+                saveJobs += async(Dispatchers.Default) {
+                    logTimed("saveArgbPng preprocessed[$index] (${width}x$height)") {
+                        saveArgbPng(preprocessedFile, pixels, width, height)
+                    }
                 }
             }
         }
@@ -1020,9 +1108,101 @@ class CameraViewModel : ViewModel() {
 
         lastAlgorithmOutputs = outputRecords
         exportImageArtifacts = artifacts
+        lastRunInput = LastRunInput(
+            originalFilePath = originalFile.absolutePath,
+            originalDisplayRotation = originalDisplayRotation,
+            preprocessedPaths = preprocessedFiles.map { it.absolutePath },
+            width = width,
+            height = height,
+            exposureTimes = exposureTimes,
+            isoValues = isoValues,
+            captureTimeMs = captureTimeMs,
+            captureMetadata = captureMetadata,
+        )
+        _canRerun.value = preprocessedFiles.isNotEmpty()
         _benchmarkResults.value = results
         Log.d("Perf", "benchmark results published (${results.size} tiles)")
         refreshHistograms(results)
+    }
+
+    /** Short summary of the tuning values the user moved off their defaults, or `null` if none. */
+    private fun describeOverrides(
+        algorithm: ImageAlgorithm,
+        overrides: Map<String, Double>
+    ): String? = algorithm.metadata.parameters
+        .mapNotNull { parameter ->
+            val value = overrides[parameter.id] ?: return@mapNotNull null
+            if (value == parameter.default) null
+            else "${parameter.label} %.${parameter.decimals}f".format(Locale.US, value)
+        }
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString(", ")
+
+    /**
+     * Re-executes the enabled algorithms with the current tuning values against the preprocessed
+     * frames of the last run, so parameters can be iterated on without re-capturing.
+     */
+    fun rerunBenchmarks(context: Context) {
+        val previous = lastRunInput ?: return
+        if (_isProcessing.value) return
+
+        // Matches takePhoto/loadInputFromGallery: keeps algo.process() off the main thread so the
+        // processing indicator keeps animating instead of freezing until the run completes.
+        viewModelScope.launch(Dispatchers.IO) {
+            _isProcessing.value = true
+            val staleOutputPaths = exportImageArtifacts
+                .filter { it.role == "algorithm_output" }
+                .map { it.path }
+            try {
+                val frames = withContext(Dispatchers.Default) {
+                    logTimed("decode preprocessed frames x${previous.preprocessedPaths.size}") {
+                        previous.preprocessedPaths.map { path -> decodeArgbFrame(path) }
+                    }
+                }
+                runBenchmarks(
+                    context = context,
+                    originalFile = File(previous.originalFilePath),
+                    algorithms = getEnabledAlgorithms(),
+                    frames = frames,
+                    width = previous.width,
+                    height = previous.height,
+                    exposureTimes = previous.exposureTimes,
+                    isoValues = previous.isoValues,
+                    captureTimeMs = previous.captureTimeMs,
+                    originalDisplayRotation = previous.originalDisplayRotation,
+                    captureMetadata = previous.captureMetadata,
+                    reusePreprocessedPaths = previous.preprocessedPaths,
+                )
+                if (_referenceImage.value != null) {
+                    logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
+                }
+                // Deleted only once the new tiles point at freshly named files.
+                withContext(Dispatchers.IO) { deleteFiles(staleOutputPaths) }
+            } catch (e: Exception) {
+                Log.e("CameraViewModel", "Re-run failed", e)
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    /**
+     * Decodes a losslessly persisted preprocessed PNG back to the exact ARGB_8888 pixels the first
+     * run fed the algorithms. Decoded one frame at a time: each is ~48 MiB at full sensor size.
+     */
+    private fun decodeArgbFrame(path: String): IntArray {
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val bitmap = BitmapFactory.decodeFile(path, options)
+            ?: throw IOException("Missing preprocessed frame: $path")
+        return try {
+            IntArray(bitmap.width * bitmap.height).also {
+                bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     fun backToCamera() {
@@ -1041,6 +1221,8 @@ class CameraViewModel : ViewModel() {
         _benchmarkResults.value = emptyList()
         lastAlgorithmOutputs = emptyList()
         exportImageArtifacts = emptyList()
+        lastRunInput = null
+        _canRerun.value = false
         captureMetadata = CaptureMetadata(
             sourceFormat = "unknown",
             width = 0,
@@ -1387,6 +1569,14 @@ class CameraViewModel : ViewModel() {
                         .put("psnr_db", metrics.psnr ?: JSONObject.NULL)
                         .put("ssim", metrics.ssim ?: JSONObject.NULL)
                 )
+                // Effective values, not just overrides, so the run is reproducible from the export
+                // alone even if the built-in defaults change later.
+                val parameters = lastAlgorithmOutputs.find { it.id == result.id }?.parameters
+                if (!parameters.isNullOrEmpty()) {
+                    val parameterEntry = JSONObject()
+                    parameters.forEach { (id, value) -> parameterEntry.put(id, value) }
+                    entry.put("parameters", parameterEntry)
+                }
             } else if (kind == "preprocessed_input") {
                 result.preprocessedFrameIndex?.let { entry.put("frame_index", it) }
             }

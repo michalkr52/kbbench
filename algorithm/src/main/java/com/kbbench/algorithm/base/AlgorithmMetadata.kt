@@ -57,6 +57,7 @@ data class FrameRequirements(
  * @property frameRequirements Requirements describing how many frames and what kind of frames
  *   should be supplied.
  * @property description Short summary suitable for UI or logs.
+ * @property parameters User-adjustable tuning knobs, empty when the algorithm has none.
  */
 data class AlgorithmMetadata(
     val name: String,
@@ -64,4 +65,5 @@ data class AlgorithmMetadata(
     val category: AlgorithmCategory,
     val frameRequirements: FrameRequirements,
     val description: String,
+    val parameters: List<AlgorithmParameter> = emptyList(),
 )
