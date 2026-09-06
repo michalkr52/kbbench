@@ -519,10 +519,18 @@ class CameraViewModel : ViewModel() {
                 val cfaPattern = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
                     ?: CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
 
+                // Colour rendering is taken once from the first frame: bracketed frames keep auto WB,
+                // so per-frame gains would drift and fuse into colour artifacts.
+                val referenceMetadata = capturedFrames.first().metadata
+                val wbGains = referenceMetadata.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                val colorMatrix = if (isRaw) cameraToSrgbMatrix(chars, referenceMetadata) else null
+
                 // Convert captured frames to display-oriented ARGB pixels for algorithms
                 val rotation = computeRelativeRotation(chars)
                 val decodedFrames = logTimed("decodeToArgb x${capturedFrames.size}") {
-                    capturedFrames.map { frame -> decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern) }
+                    capturedFrames.map { frame ->
+                        decodeToArgb(frame, whiteLevel, blackLevel, cfaPattern, wbGains, colorMatrix)
+                    }
                 }
                 val framePixels = logTimed("rotateArgb x${decodedFrames.size}") {
                     decodedFrames.map { (pixels, frameWidth, frameHeight) ->
@@ -558,8 +566,7 @@ class CameraViewModel : ViewModel() {
                             rawWhiteLevel = if (isRaw) whiteLevel else null,
                             rawBlackLevel = if (isRaw) blackLevel else null,
                             cfaPattern = if (isRaw) cfaPattern else null,
-                            whiteBalanceGains = capturedFrames.first().metadata
-                                .get(CaptureResult.COLOR_CORRECTION_GAINS)
+                            whiteBalanceGains = wbGains
                                 ?.let { listOf(it.red, it.greenEven, it.blue) }
                         ))
                 }
@@ -575,13 +582,66 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    /** Bradford-adapted CIE XYZ (D50) to linear sRGB, the white point DNG forward matrices target. */
+    private val xyzD50ToSrgb = floatArrayOf(
+        3.1338561f, -1.6168667f, -0.4906146f,
+        -0.9787684f, 1.9161415f, 0.0334540f,
+        0.0719453f, -0.2289914f, 1.4052427f
+    )
+
+    /**
+     * Row-major 3x3 transform from white-balanced camera RGB to linear sRGB.
+     *
+     * Prefers the DNG forward matrix from [CameraCharacteristics], which is static factory
+     * calibration mandatory on RAW-capable devices and is what a DNG renderer uses. The
+     * per-capture COLOR_CORRECTION_TRANSFORM is only a fallback: devices without
+     * MANUAL_POST_PROCESSING often report it as null or unity while AWB is on auto.
+     */
+    private fun cameraToSrgbMatrix(
+        chars: CameraCharacteristics,
+        metadata: CaptureResult
+    ): FloatArray? {
+        val forward = selectForwardMatrix(chars)
+        if (forward != null) {
+            val matrix = multiply3x3(xyzD50ToSrgb, forward)
+            Log.d("CameraViewModel", "Camera->sRGB from forward matrix: ${matrix.joinToString()}")
+            return matrix
+        }
+
+        val transform = metadata.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let { toRowMajor(it) }
+        if (transform == null) {
+            Log.w("CameraViewModel", "No colour calibration available; RAW colours stay camera-native")
+        }
+        return transform
+    }
+
+    private fun selectForwardMatrix(chars: CameraCharacteristics): FloatArray? {
+        val first = chars.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
+        val second = chars.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
+        val secondIsD65 = chars.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ==
+            CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1_D65
+        val chosen = if (secondIsD65) second ?: first else first ?: second
+        return chosen?.let { toRowMajor(it) }
+    }
+
+    private fun toRowMajor(transform: android.hardware.camera2.params.ColorSpaceTransform): FloatArray =
+        FloatArray(9) { i -> transform.getElement(i % 3, i / 3).toFloat() }
+
+    private fun multiply3x3(a: FloatArray, b: FloatArray): FloatArray =
+        FloatArray(9) { i ->
+            val row = i / 3
+            val col = i % 3
+            a[row * 3] * b[col] + a[row * 3 + 1] * b[3 + col] + a[row * 3 + 2] * b[6 + col]
+        }
+
     private fun decodeToArgb(
         frame: CombinedResult,
         whiteLevel: Int = 1023,
         blackLevel: Int = 64,
-        cfaPattern: Int = CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
-    ): Triple<IntArray, Int, Int> {
-        val image = frame.image
+        cfaPattern: Int = CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB,
+        whiteBalanceGains: android.hardware.camera2.params.RggbChannelVector? = null,
+        colorMatrix: FloatArray? = null
+    ): Triple<IntArray, Int, Int> {        val image = frame.image
         return if (image.format == ImageFormat.JPEG) {
             val buffer = image.planes[0].buffer
             buffer.rewind()
@@ -607,14 +667,15 @@ class CameraViewModel : ViewModel() {
                 whiteLevel = whiteLevel,
                 blackLevel = blackLevel
             )
-            // White balance gains are applied inside demosaic (float domain) to avoid
-            // re-quantizing already-8-bit values, which produced comb-like histogram spikes.
-            val gains = frame.metadata.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            // White balance gains and the colour transform are applied inside demosaic (float domain)
+            // to avoid re-quantizing already-8-bit values, which produced comb-like histogram spikes.
+            // Both are supplied by the caller so every frame of a bracket shares one colour space.
             val pixels = BayerDemosaic.demosaic(
                 raw, w, h, CfaPattern.fromId(cfaPattern),
-                rGain = gains?.red ?: 1f,
-                gGain = gains?.greenEven ?: 1f,
-                bGain = gains?.blue ?: 1f
+                rGain = whiteBalanceGains?.red ?: 1f,
+                gGain = whiteBalanceGains?.greenEven ?: 1f,
+                bGain = whiteBalanceGains?.blue ?: 1f,
+                colorMatrix = colorMatrix
             )
 
             Triple(pixels, w, h)

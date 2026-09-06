@@ -23,10 +23,18 @@ object BayerDemosaic {
     /**
      * Demosaics a RAW image represented as normalized floats (0..1) into ARGB_8888 pixels.
      *
-     * White balance gains are applied in the float domain before the single 8-bit
-     * quantization below, so the result stays injective per input level. Applying gains
-     * to already-quantized 8-bit values instead would truncate twice and produce comb-like
+     * Stage order is white balance -> [colorMatrix] -> sRGB OETF -> single 8-bit quantization, all in
+     * the float domain so the result stays injective per input level. Applying any of these to
+     * already-quantized 8-bit values instead would truncate repeatedly and produce comb-like
      * gaps/spikes per channel in the output histogram.
+     *
+     * The linear result is sRGB-encoded (OETF) before quantization: RAW_SENSOR data is scene-linear,
+     * and 8-bit output without this encoding crushes shadow detail into a handful of code values and
+     * looks severely under-exposed compared to a device-rendered preview (e.g. DngCreator/gallery).
+     *
+     * @param colorMatrix row-major 3x3 transform from white-balanced camera RGB to linear sRGB.
+     *   Rows are renormalized to sum to 1 so a neutral input stays neutral. Without it the camera's
+     *   broad, overlapping CFA primaries render visibly desaturated.
      */
     fun demosaic(
         raw: FloatArray,
@@ -35,7 +43,8 @@ object BayerDemosaic {
         pattern: CfaPattern,
         rGain: Float = 1f,
         gGain: Float = 1f,
-        bGain: Float = 1f
+        bGain: Float = 1f,
+        colorMatrix: FloatArray? = null
     ): IntArray {
         val rX: Int; val rY: Int
         val bX: Int; val bY: Int
@@ -47,6 +56,7 @@ object BayerDemosaic {
         }
         val normR = rGain / gGain
         val normB = bGain / gGain
+        val m = colorMatrix?.let { normalizeRows(it) }
 
         val pixels = IntArray(width * height)
         for (y in 0 until height) {
@@ -78,14 +88,55 @@ object BayerDemosaic {
                     }
                 }
 
-                val ri = ((r * normR).coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
-                val gi = (g.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
-                val bi = ((b * normB).coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+                var lr = r * normR
+                var lg = g
+                var lb = b * normB
+                if (m != null) {
+                    val tr = m[0] * lr + m[1] * lg + m[2] * lb
+                    val tg = m[3] * lr + m[4] * lg + m[5] * lb
+                    val tb = m[6] * lr + m[7] * lg + m[8] * lb
+                    lr = tr; lg = tg; lb = tb
+                }
+
+                val ri = encodeSrgb8(lr)
+                val gi = encodeSrgb8(lg)
+                val bi = encodeSrgb8(lb)
                 pixels[y * width + x] = (0xFF shl 24) or (ri shl 16) or (gi shl 8) or bi
             }
         }
         return pixels
     }
+
+    private const val SRGB_LUT_SIZE = 65536
+
+    /** IEC 61966-2-1 sRGB OETF, tabulated so the per-pixel path avoids three pow() calls. */
+    private val srgbLut: IntArray by lazy {
+        IntArray(SRGB_LUT_SIZE) { i ->
+            val linear = i.toFloat() / (SRGB_LUT_SIZE - 1)
+            val encoded =
+                if (linear <= 0.0031308f) linear * 12.92f
+                else 1.055f * Math.pow(linear.toDouble(), 1.0 / 2.4).toFloat() - 0.055f
+            (encoded * 255f + 0.5f).toInt().coerceIn(0, 255)
+        }
+    }
+
+    private fun encodeSrgb8(linear: Float): Int =
+        srgbLut[(linear.coerceIn(0f, 1f) * (SRGB_LUT_SIZE - 1)).toInt()]
+
+    /** Scales each row to sum to 1 so the transform maps neutral camera RGB to neutral sRGB. */
+    private fun normalizeRows(matrix: FloatArray): FloatArray {
+        val out = FloatArray(9)
+        for (row in 0 until 3) {
+            val base = row * 3
+            val sum = matrix[base] + matrix[base + 1] + matrix[base + 2]
+            val scale = if (kotlin.math.abs(sum) > 1e-6f) 1f / sum else 1f
+            out[base] = matrix[base] * scale
+            out[base + 1] = matrix[base + 1] * scale
+            out[base + 2] = matrix[base + 2] * scale
+        }
+        return out
+    }
+
 
     /**
      * Normalizes a 16-bit RAW buffer into floats using white and black levels.
