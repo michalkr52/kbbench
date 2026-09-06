@@ -29,8 +29,45 @@ internal data class TestPair(val name: String, val clean: TestFrame, val noisy: 
 /** Longest side kept from a dataset frame; SIDD captures are ~5000 px and far too slow whole. */
 internal const val MAX_FRAME = 512
 
-/** Cap on how many frames a single test walks, so the suite stays quick. */
-internal const val MAX_FRAMES = 8
+/**
+ * Cap on how many frames a single test walks, so dropping in a full dataset cannot hang the suite.
+ * Decoding the multi-megabyte source PNGs dominates the runtime, not the algorithms.
+ */
+internal const val MAX_FRAMES = 24
+
+/**
+ * Capture settings SIDD encodes in its directory names, as in `0050_002_N6_03200_03200_5500_L`.
+ * Other datasets name their files differently, so this is best-effort.
+ */
+internal data class SiddMetadata(
+    val camera: String,
+    val iso: Int,
+    val shutter: Int,
+    val illuminantK: Int,
+    /** `N` for normal lighting, `L` for low light. */
+    val brightness: String,
+)
+
+private val SIDD_NAME = Regex("""^\d{4}_\d{3}_([A-Z0-9]+)_(\d+)_(\d+)_(\d+)_([A-Z])$""")
+
+/** @return the settings encoded in [name], or `null` if it is not a SIDD scene name. */
+internal fun parseSiddName(name: String): SiddMetadata? {
+    val m = SIDD_NAME.matchEntire(name) ?: return null
+    return SiddMetadata(
+        camera = m.groupValues[1],
+        iso = m.groupValues[2].toInt(),
+        shutter = m.groupValues[3].toInt(),
+        illuminantK = m.groupValues[4].toInt(),
+        brightness = m.groupValues[5],
+    )
+}
+
+/**
+ * Loaded once per JVM: decoding the multi-megabyte dataset PNGs costs more than everything the
+ * tests then do with them. Safe to share because no algorithm writes into its input frame.
+ */
+internal val cleanReferences: List<TestFrame> by lazy { loadCleanReferences() }
+internal val noisyPairs: List<TestPair> by lazy { loadNoisyPairs() }
 
 /** Clean references for degrade-and-restore tests, empty when `clean/` is missing. */
 internal fun loadCleanReferences(): List<TestFrame> =

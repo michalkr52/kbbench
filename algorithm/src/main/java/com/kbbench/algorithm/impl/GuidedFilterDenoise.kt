@@ -15,15 +15,19 @@ import com.kbbench.algorithm.filter.GuidedFilter
  * RGB channel with the channel guiding itself. Runs on [AlgorithmInput.frames]`.first()` and
  * preserves alpha. [GuidedFilter] lists the departures from the paper.
  *
+ * Defaults are the paper's own denoising configuration, `r = 8` and `eps = 0.2^2` of Fig. 8.
+ *
  * @param radius Window half-width in pixels, at least 1; the window is `(2 * radius + 1)` square.
- * @param eps Regularization in the paper's normalized units, intensities in `[0, 1]` — the authors
- *   quote `0.1^2`, `0.2^2`, `0.4^2` — scaled internally to the 8-bit range so published values can
- *   be used verbatim. Must be positive; larger smooths more.
+ * @param eps Regularization in the paper's normalized units, intensities in `[0, 1]`, scaled
+ *   internally to the 8-bit range so published values can be used verbatim. Must be positive;
+ *   larger smooths more. Section 3.2 notes it plays the role the range variance `sigmaRange^2`
+ *   plays in the bilateral filter, and the paper pairs `eps = t^2` with `sigmaRange = t` wherever
+ *   it compares the two.
  * @throws IllegalArgumentException if [radius] or `eps` is out of range.
  */
 class GuidedFilterDenoise(
-    private val radius: Int = 4,
-    eps: Double = 0.04 * 0.04,
+    private val radius: Int = 8,
+    eps: Double = 0.2 * 0.2,
 ) : ImageAlgorithm {
 
     init {

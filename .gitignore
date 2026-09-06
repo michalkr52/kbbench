@@ -39,3 +39,4 @@ google-services.json
 # Real images from published datasets
 algorithm/src/test/resources/pairs/
 algorithm/src/test/resources/clean/
+algorithm/src/test/resources/*.tar.gz

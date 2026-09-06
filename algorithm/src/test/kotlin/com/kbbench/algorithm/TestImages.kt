@@ -1,6 +1,5 @@
 package com.kbbench.algorithm
 
-import com.kbbench.algorithm.filter.BoxFilter
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
@@ -53,21 +52,55 @@ internal fun withGaussianNoise(src: IntArray, sigma: Double, seed: Long): IntArr
 }
 
 /**
- * Windowed-mean blur, the known degradation in restoration tests. A `radius = 1` window matches the
- * 3x3 reach of both unsharp-masking operators, so it is damage they could in principle undo.
+ * Separable Gaussian blur, the known degradation in restoration tests.
  *
+ * Gaussian rather than a box mean because a box of radius 1 has exactly the 3x3 support of both
+ * unsharp-masking operators, which hands the fixed-gain filter a degradation it is built to invert
+ * and flatters it for a reason that has nothing to do with adaptation.
+ *
+ * Borders replicate, matching how the sharpeners treat them. The kernel is truncated at three
+ * standard deviations and renormalized, so it sums to one regardless.
+ *
+ * @param sigma Standard deviation in pixels; must be positive.
  * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
  */
-internal fun boxBlurred(src: IntArray, width: Int, height: Int, radius: Int): IntArray {
+internal fun gaussianBlurred(src: IntArray, width: Int, height: Int, sigma: Double): IntArray {
+    require(sigma > 0.0) { "sigma must be > 0, got $sigma" }
+
+    val radius = ceil(3.0 * sigma).toInt()
+    val kernel = DoubleArray(2 * radius + 1) { i ->
+        val d = (i - radius).toDouble()
+        exp(-(d * d) / (2.0 * sigma * sigma))
+    }
+    val sum = kernel.sum()
+    for (i in kernel.indices) kernel[i] /= sum
+
     val out = IntArray(src.size)
-    val plane = FloatArray(src.size)
-    val scratch = FloatArray(src.size)
+    val plane = DoubleArray(src.size)
+    val scratch = DoubleArray(src.size)
 
     for (shift in intArrayOf(16, 8, 0)) {
-        for (i in src.indices) plane[i] = ((src[i] shr shift) and 0xFF).toFloat()
-        BoxFilter.mean(plane, plane, scratch, width, height, radius)
-        for (i in src.indices) {
-            out[i] = out[i] or ((plane[i] + 0.5f).toInt().coerceIn(0, 255) shl shift)
+        for (i in src.indices) plane[i] = ((src[i] shr shift) and 0xFF).toDouble()
+
+        for (y in 0 until height) {
+            val row = y * width
+            for (x in 0 until width) {
+                var acc = 0.0
+                for (k in kernel.indices) {
+                    acc += kernel[k] * plane[row + (x + k - radius).coerceIn(0, width - 1)]
+                }
+                scratch[row + x] = acc
+            }
+        }
+        for (y in 0 until height) {
+            val row = y * width
+            for (x in 0 until width) {
+                var acc = 0.0
+                for (k in kernel.indices) {
+                    acc += kernel[k] * scratch[(y + k - radius).coerceIn(0, height - 1) * width + x]
+                }
+                out[row + x] = out[row + x] or ((acc + 0.5).toInt().coerceIn(0, 255) shl shift)
+            }
         }
     }
     for (i in src.indices) out[i] = out[i] or (src[i] and (0xFF shl 24))

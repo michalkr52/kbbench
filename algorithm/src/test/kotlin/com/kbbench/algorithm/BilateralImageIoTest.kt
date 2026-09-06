@@ -70,7 +70,7 @@ class BilateralImageIoTest {
             buildString {
                 appendLine("FastBilateral metrics")
                 appendLine("input=${inputFile.path} (${width}x$height)")
-                appendLine("sigmaSpatial=$SIGMA_SPATIAL px  sigmaRange=$SIGMA_RANGE (8-bit)")
+                appendLine("filtered at the algorithm defaults; fidelity check below uses its own sigmas")
                 appendLine("totalTime=${output.totalTime}ms")
                 appendLine(
                     "departure from input (distance, not quality): " +
@@ -84,7 +84,10 @@ class BilateralImageIoTest {
                         "std ${"%.2f".format(before.lumaStd)} -> ${"%.2f".format(after.lumaStd)}"
                 )
                 appendLine()
-                appendLine("Grid approximation vs brute force, ${cropSize}x$cropSize centre crop:")
+                appendLine(
+                    "Grid approximation vs brute force, ${cropSize}x$cropSize centre crop, " +
+                        "sigmaSpatial=$SIGMA_SPATIAL sigmaRange=$SIGMA_RANGE:"
+                )
                 appendLine("  psnr=${"%.4f".format(fidelity.psnr)} dB  ssim=${"%.6f".format(fidelity.ssim)}")
                 appendLine("  mean per-channel error=${"%.4f".format(meanChannelDifference(exact, approximate))}")
                 appendLine("output=${outputFile.path}")
@@ -98,6 +101,11 @@ class BilateralImageIoTest {
 
     private companion object {
         const val CROP_SIZE = 256
+
+        /**
+         * Deliberately below [FastBilateralDenoise]'s default: the brute-force reference costs
+         * `O(sigmaSpatial^2)` per pixel, and the paper's own `16` would mean 4225 taps per pixel.
+         */
         const val SIGMA_SPATIAL = 3.0
 
         /** [FastBilateralDenoise]'s default `0.1`, on the 8-bit scale. */

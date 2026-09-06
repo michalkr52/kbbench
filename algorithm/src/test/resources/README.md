@@ -21,7 +21,7 @@ tests real ground truth, where higher scores genuinely mean better.
 
 ## `clean/` — sharp references for degrade-and-restore
 
-Drop clean, low-noise images here (Set14, Kodak24, CBSD68, DIV2K validation — anything sharp).
+Drop clean, low-noise images here (Set5, Set14, Kodak24, CBSD68, DIV2K validation — anything sharp).
 `SharpeningRestorationTest` blurs each one, optionally adds noise, asks each sharpener to undo the
 damage, and scores the result against the untouched original. Reports to
 `build/test-output/sharpening_restoration.txt`. Gitignored, like `pairs/` below.

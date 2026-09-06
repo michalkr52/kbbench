@@ -29,7 +29,7 @@ class SharpeningRestorationTest {
 
     @Test
     fun restorationRankingDependsOnWhetherTheDegradationIsNoisy() {
-        val frames = loadCleanReferences().ifEmpty { listOf(fallbackFrame()) }
+        val frames = cleanReferences.ifEmpty { listOf(fallbackFrame()) }
 
         val sharpeners: List<Pair<String, ImageAlgorithm>> = listOf(
             "LinearUnsharpMask" to LinearUnsharpMasking(),
@@ -45,7 +45,7 @@ class SharpeningRestorationTest {
         val deltas = mutableMapOf<Pair<Double, String>, Double>()
 
         for (sigma in doubleArrayOf(0.0, NOISE_SIGMA)) {
-            for (radius in intArrayOf(1, 2, 3)) {
+            for (blur in BLUR_SIGMAS) {
                 var baselinePsnr = 0.0
                 var baselineSsim = 0.0
                 val restoredPsnr = mutableMapOf<String, Double>()
@@ -53,7 +53,7 @@ class SharpeningRestorationTest {
                 val totalMs = mutableMapOf<String, Long>()
 
                 for (frame in frames) {
-                    val degraded = degrade(frame, radius, sigma)
+                    val degraded = degrade(frame, blur, sigma)
                     val baseline = calculateQualityMetrics(frame.pixels, degraded)
                     baselinePsnr += baseline.psnr / frames.size
                     baselineSsim += baseline.ssim / frames.size
@@ -65,7 +65,7 @@ class SharpeningRestorationTest {
                         restoredSsim[name] = (restoredSsim[name] ?: 0.0) + restored.ssim / frames.size
                         totalMs[name] = (totalMs[name] ?: 0L) + output.totalTime
 
-                        if (radius == HEADLINE_RADIUS && frame === frames.first()) {
+                        if (blur == HEADLINE_BLUR && frame === frames.first()) {
                             writePng(
                                 output.pixels, frame.width, frame.height,
                                 File("build/test-output/restored_${slug(name)}_sigma${sigma.toInt()}.png"),
@@ -73,7 +73,7 @@ class SharpeningRestorationTest {
                         }
                     }
 
-                    if (radius == HEADLINE_RADIUS && frame === frames.first()) {
+                    if (blur == HEADLINE_BLUR && frame === frames.first()) {
                         writePng(
                             degraded, frame.width, frame.height,
                             File("build/test-output/restored_degraded_sigma${sigma.toInt()}.png"),
@@ -82,14 +82,14 @@ class SharpeningRestorationTest {
                 }
 
                 report.appendLine()
-                report.appendLine("box blur radius $radius, noise sigma $sigma")
+                report.appendLine("gaussian blur sigma $blur, noise sigma $sigma")
                 report.appendLine(
                     "  ${"do nothing".padEnd(20)} psnr=${"%7.3f".format(baselinePsnr)} dB  " +
                         "ssim=${"%.5f".format(baselineSsim)}"
                 )
                 for ((name, _) in sharpeners) {
                     val delta = restoredPsnr.getValue(name) - baselinePsnr
-                    if (radius == HEADLINE_RADIUS) deltas[sigma to name] = delta
+                    if (blur == HEADLINE_BLUR) deltas[sigma to name] = delta
                     report.appendLine(
                         "  ${name.padEnd(20)} psnr=${"%7.3f".format(restoredPsnr.getValue(name))} dB  " +
                             "ssim=${"%.5f".format(restoredSsim.getValue(name))}  " +
@@ -111,18 +111,20 @@ class SharpeningRestorationTest {
             "linear UM failed to recover a noise-free blur: ${"%+.3f".format(noiseFreeLinear)} dB",
         )
 
-        // Once the degradation carries noise the picture inverts, and by a wide margin.
-        val noisyLinear = deltas.getValue(NOISE_SIGMA to "LinearUnsharpMask")
-        val noisyAdaptive = deltas.getValue(NOISE_SIGMA to "AdaptiveUnsharpMask")
+        // Once the degradation carries noise the picture inverts. Both deltas are negative there, so
+        // the claim is stated as a ratio of damage: an absolute dB margin would be a property of the
+        // image set rather than of the algorithms, and the gap does move a lot between sets.
+        val linearDamage = -deltas.getValue(NOISE_SIGMA to "LinearUnsharpMask")
+        val adaptiveDamage = -deltas.getValue(NOISE_SIGMA to "AdaptiveUnsharpMask")
         assertTrue(
-            noisyAdaptive > noisyLinear + MARGIN_DB,
-            "adaptive UM was expected to survive noise far better than linear: " +
-                "${"%+.3f".format(noisyAdaptive)} dB vs ${"%+.3f".format(noisyLinear)} dB",
+            adaptiveDamage < linearDamage * MAX_DAMAGE_RATIO,
+            "adaptive UM was expected to lose far less than linear under noise: " +
+                "${"%.3f".format(adaptiveDamage)} dB vs ${"%.3f".format(linearDamage)} dB",
         )
     }
 
-    private fun degrade(frame: TestFrame, radius: Int, sigma: Double): IntArray {
-        val blurred = boxBlurred(frame.pixels, frame.width, frame.height, radius)
+    private fun degrade(frame: TestFrame, blur: Double, sigma: Double): IntArray {
+        val blurred = gaussianBlurred(frame.pixels, frame.width, frame.height, blur)
         return if (sigma > 0.0) withGaussianNoise(blurred, sigma, seed = 3) else blurred
     }
 
@@ -145,10 +147,13 @@ class SharpeningRestorationTest {
     private companion object {
         const val NOISE_SIGMA = 4.0
 
-        /** The operating point the assertions read, and the only one whose images get written. */
-        const val HEADLINE_RADIUS = 2
+        /** Blur widths in pixels, spanning mild to moderate. */
+        val BLUR_SIGMAS = doubleArrayOf(0.5, 1.0, 1.5)
 
-        /** Observed gap at the headline point is over 4 dB; this leaves ample room. */
-        const val MARGIN_DB = 2.0
+        /** The operating point the assertions read, and the only one whose images get written. */
+        const val HEADLINE_BLUR = 1.0
+
+        /** Observed damage ratio is 0.09 on Set5 and 0.04 on a noisy phone photo. */
+        const val MAX_DAMAGE_RATIO = 0.5
     }
 }
