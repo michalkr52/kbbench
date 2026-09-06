@@ -10,6 +10,11 @@ class AlgorithmRegistry {
     private val algorithms: List<ImageAlgorithm> = listOf(
         ContrastStretching(),
         ExposureFusion(),
+        GuidedFilterDenoise(),
+        GuidedFilterColorDenoise(),
+        FastBilateralDenoise(),
+        LinearUnsharpMasking(),
+        AdaptiveUnsharpMasking(),
     )
 
     /** Returns all registered algorithms. */
