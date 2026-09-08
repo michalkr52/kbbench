@@ -1,11 +1,12 @@
 package com.kbbench.app.ui.components
 
 import android.view.Surface
-import android.view.SurfaceHolder
+import android.graphics.SurfaceTexture
+import android.view.TextureView
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import com.kbbench.utils.AutoFitSurfaceView
+import com.kbbench.utils.AutoFitTextureView
 
 @Composable
 fun CameraPreview(
@@ -17,23 +18,28 @@ fun CameraPreview(
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            AutoFitSurfaceView(context).apply {
-                holder.addCallback(object : SurfaceHolder.Callback {
-                    override fun surfaceCreated(holder: SurfaceHolder) {
-                        onSurfaceCreated(holder.surface)
+            AutoFitTextureView(context).apply {
+                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(
+                        surface: SurfaceTexture,
+                        width: Int,
+                        height: Int
+                    ) {
+                        onSurfaceCreated(Surface(surface))
                     }
 
-                    override fun surfaceChanged(
-                        holder: SurfaceHolder,
-                        format: Int,
+                    override fun onSurfaceTextureSizeChanged(
+                        surface: SurfaceTexture,
                         width: Int,
                         height: Int
                     ) {
                     }
 
-                    override fun surfaceDestroyed(holder: SurfaceHolder) {
+                    override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
+
+                    override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
                     }
-                })
+                }
             }
         },
         update = { view ->

@@ -35,6 +35,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kbbench.app.ui.components.AlgorithmSelectorDialog
 import com.kbbench.app.ui.components.CameraPreview
+import com.kbbench.app.ui.components.RuleOfThirdsOverlay
+import com.kbbench.app.ui.components.RuleOfThirdsToolbar
 import com.kbbench.app.viewmodel.AppScreen
 import com.kbbench.app.viewmodel.CameraViewModel
 import kotlinx.coroutines.delay
@@ -57,6 +59,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val isProcessing by viewModel.isProcessing.collectAsState()
     val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
     val algorithmParameters by viewModel.algorithmParameters.collectAsState()
+    val showRuleOfThirds by viewModel.showRuleOfThirds.collectAsState()
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
@@ -146,6 +149,18 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             viewModel.initialize(context)
                             viewModel.startPreview(context, surface)
                         }
+                    )
+
+                    if (showRuleOfThirds) {
+                        RuleOfThirdsOverlay(modifier = Modifier.matchParentSize())
+                    }
+
+                    RuleOfThirdsToolbar(
+                        showGrid = showRuleOfThirds,
+                        onToggleGrid = { viewModel.setShowRuleOfThirds(!showRuleOfThirds) },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
                     )
 
                     // Focus indicator

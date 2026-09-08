@@ -65,11 +65,19 @@ class BenchmarkSettingsStore(context: Context) {
         prefs.edit().putInt(KEY_CAPTURE_FORMAT, format).apply()
     }
 
+    fun loadShowRuleOfThirds(): Boolean =
+        prefs.getBoolean(KEY_SHOW_RULE_OF_THIRDS, false)
+
+    fun saveShowRuleOfThirds(show: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_RULE_OF_THIRDS, show).apply()
+    }
+
     private companion object {
         const val TAG = "BenchmarkSettings"
         const val PREFS_NAME = "kbbench_settings"
         const val KEY_ENABLED_ALGORITHMS = "enabled_algorithms"
         const val KEY_ALGORITHM_PARAMETERS = "algorithm_parameters"
         const val KEY_CAPTURE_FORMAT = "capture_format"
+        const val KEY_SHOW_RULE_OF_THIRDS = "show_rule_of_thirds"
     }
 }

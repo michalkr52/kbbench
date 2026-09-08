@@ -282,6 +282,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _captureFormat = MutableStateFlow(ImageFormat.JPEG)
     val captureFormat = _captureFormat.asStateFlow()
 
+    private val _showRuleOfThirds = MutableStateFlow(settingsStore.loadShowRuleOfThirds())
+    val showRuleOfThirds = _showRuleOfThirds.asStateFlow()
+
     private val _referenceImage = MutableStateFlow<ReferenceImage?>(null)
     val referenceImage = _referenceImage.asStateFlow()
 
@@ -342,6 +345,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (format == ImageFormat.RAW_SENSOR) {
             _zoomLevel.value = 1f
         }
+    }
+
+    fun setShowRuleOfThirds(show: Boolean) {
+        _showRuleOfThirds.value = show
+        settingsStore.saveShowRuleOfThirds(show)
     }
 
     /**
