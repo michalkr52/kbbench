@@ -30,6 +30,9 @@ import com.kbbench.algorithm.impl.AlgorithmRegistry
 import com.kbbench.app.settings.BenchmarkSettingsStore
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
+import com.kbbench.algorithm.preprocessing.DngImage
+import com.kbbench.algorithm.preprocessing.DngReader
+import com.kbbench.algorithm.preprocessing.GainMapCorrection
 import com.kbbench.algorithm.preprocessing.LensShadingCorrection
 import com.kbbench.algorithm.preprocessing.Raw16Decoder
 import com.kbbench.algorithm.preprocessing.ShadingMap
@@ -68,6 +71,9 @@ import kotlin.coroutines.suspendCoroutine
 
 /** DngCreator rejects thumbnails larger than this on either axis. */
 private const val DNG_THUMBNAIL_MAX_DIMENSION = 256
+
+/** Fixed inset DngCreator writes as DefaultCropOrigin/DefaultCropSize, in sensor pixels. */
+private const val DNG_DEFAULT_CROP_MARGIN = 8
 
 enum class AppScreen {
     CAMERA,
@@ -139,6 +145,17 @@ private data class ExportImageArtifact(
 private data class PersistedPickedImage(
     val file: File,
     val sourceFormat: String,
+)
+
+/** An imported DNG rendered by this app's RAW pipeline, with the metadata that drove the render. */
+private class ImportedRawFrame(
+    val pixels: IntArray,
+    val width: Int,
+    val height: Int,
+    val whiteLevel: Int,
+    val blackLevel: Int,
+    val cfaPattern: Int,
+    val whiteBalanceGains: List<Float>?,
 )
 
 /** Everything needed to re-execute algorithms on an already prepared capture. */
@@ -588,29 +605,45 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 // Get RAW white/black levels from characteristics for proper normalization
                 val whiteLevel = chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023
-                val blackLevel = chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let {
-                    // Average of 4 Bayer channels
-                    ((it.getOffsetForIndex(0, 0) + it.getOffsetForIndex(0, 1) +
-                      it.getOffsetForIndex(1, 0) + it.getOffsetForIndex(1, 1)) / 4)
-                } ?: 64
+                // DngCreator writes the per-frame dynamic black level when the device reports one,
+                // so reading the static pattern here would normalize against a different floor than
+                // the DNG declares and a re-imported capture would not reproduce this frame.
+                val blackLevel = firstResult.metadata.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+                    ?.takeIf { it.size == 4 }
+                    ?.let { (it.sum() / 4f).toInt() }
+                    ?: chars.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let {
+                        // Average of 4 Bayer channels
+                        ((it.getOffsetForIndex(0, 0) + it.getOffsetForIndex(0, 1) +
+                          it.getOffsetForIndex(1, 0) + it.getOffsetForIndex(1, 1)) / 4)
+                    } ?: 64
                 val cfaPattern = chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
                     ?: CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB
 
                 // Colour rendering is taken once from the first frame: bracketed frames keep auto WB,
                 // so per-frame gains would drift and fuse into colour artifacts.
                 val referenceMetadata = capturedFrames.first().metadata
-                val wbGains = referenceMetadata.get(CaptureResult.COLOR_CORRECTION_GAINS)
+                val wbGains = whiteBalanceGains(referenceMetadata)
                 val colorMatrix = if (isRaw) cameraToSrgbMatrix(chars, referenceMetadata) else null
                 val shadingMap = if (isRaw) lensShadingMap(referenceMetadata) else null
 
                 // Convert captured frames to display-oriented ARGB pixels for algorithms
                 val rotation = computeRelativeRotation(chars)
+                // A RAW buffer spans the pre-correction active array; the DefaultCrop area the DNG
+                // declares is smaller, and cropping to it after demosaicing drops the border where
+                // interpolation has no neighbours and matches what a spec-compliant renderer shows.
+                val rawCrop = if (isRaw) {
+                    defaultCropRect(firstResult.image.width, firstResult.image.height)
+                        ?.also { Log.d("CameraViewModel", "DefaultCrop ${it.width()}x${it.height()} at ${it.left},${it.top}") }
+                } else null
                 val decodedFrames = logTimed("decodeToArgb x${capturedFrames.size}") {
                     capturedFrames.map { frame ->
-                        decodeToArgb(
+                        val (pixels, frameWidth, frameHeight) = decodeToArgb(
                             frame, whiteLevel, blackLevel, cfaPattern,
                             wbGains, colorMatrix, shadingMap
                         )
+                        // Cropped inside the map so the full-size array is collectable right away.
+                        if (rawCrop != null) cropArgb(pixels, frameWidth, frameHeight, rawCrop)
+                        else Triple(pixels, frameWidth, frameHeight)
                     }
                 }
 
@@ -675,8 +708,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawWhiteLevel = if (isRaw) whiteLevel else null,
                             rawBlackLevel = if (isRaw) blackLevel else null,
                             cfaPattern = if (isRaw) cfaPattern else null,
-                            whiteBalanceGains = wbGains
-                                ?.let { listOf(it.red, it.greenEven, it.blue) }
+                            whiteBalanceGains = wbGains?.toList()
                         ))
                 }
                 logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
@@ -743,8 +775,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             a[row * 3] * b[col] + a[row * 3 + 1] * b[3 + col] + a[row * 3 + 2] * b[6 + col]
         }
 
-    private fun lensShadingMap(metadata: CaptureResult): ShadingMap? {
-        val map = metadata.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
+    /**
+     * Red/green/blue multipliers for the demosaic, green normalized to 1.
+     *
+     * Prefers SENSOR_NEUTRAL_COLOR_POINT because that is what `DngCreator` stores as AsShotNeutral;
+     * deriving them from COLOR_CORRECTION_GAINS instead would white-balance a capture differently
+     * from its own DNG and from any standard RAW renderer.
+     */
+    private fun whiteBalanceGains(metadata: CaptureResult): FloatArray? {
+        val neutral = metadata.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)
+        if (neutral != null && neutral.size == 3) {
+            val values = FloatArray(3) { neutral[it].toFloat() }
+            if (values.all { it > 0f }) {
+                return floatArrayOf(values[1] / values[0], 1f, values[1] / values[2])
+            }
+        }
+        Log.w("CameraViewModel", "No neutral colour point; falling back to COLOR_CORRECTION_GAINS")
+        return metadata.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            ?.let { floatArrayOf(it.red, it.greenEven, it.blue) }
+    }
+
+    private fun lensShadingMap(metadata: CaptureResult): ShadingMap? {        val map = metadata.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)
         if (map == null) {
             Log.w("CameraViewModel", "No lens shading map; RAW keeps the lens' corner falloff")
             return null
@@ -759,7 +810,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         whiteLevel: Int = 1023,
         blackLevel: Int = 64,
         cfaPattern: Int = CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB,
-        whiteBalanceGains: android.hardware.camera2.params.RggbChannelVector? = null,
+        whiteBalanceGains: FloatArray? = null,
         colorMatrix: FloatArray? = null,
         shadingMap: ShadingMap? = null
     ): Triple<IntArray, Int, Int> {        val image = frame.image
@@ -797,13 +848,116 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             // Both are supplied by the caller so every frame of a bracket shares one colour space.
             val pixels = BayerDemosaic.demosaic(
                 raw, w, h, bayerPattern,
-                rGain = whiteBalanceGains?.red ?: 1f,
-                gGain = whiteBalanceGains?.greenEven ?: 1f,
-                bGain = whiteBalanceGains?.blue ?: 1f,
+                rGain = whiteBalanceGains?.getOrNull(0) ?: 1f,
+                gGain = whiteBalanceGains?.getOrNull(1) ?: 1f,
+                bGain = whiteBalanceGains?.getOrNull(2) ?: 1f,
                 colorMatrix = colorMatrix
             )
 
             Triple(pixels, w, h)
+        }
+    }
+
+    /**
+     * The DefaultCrop area the DNG written for this capture will declare.
+     *
+     * `DngCreator` does not derive this from the active array: it always insets the pre-correction
+     * active array by a fixed margin ("Default margin recommended by Adobe for interpolation"), so
+     * the capture path has to use the same rule or its frames will not match its own DNG.
+     */
+    private fun defaultCropRect(width: Int, height: Int): android.graphics.Rect? {
+        val margin = DNG_DEFAULT_CROP_MARGIN
+        if (width <= margin * 2 || height <= margin * 2) return null
+        return android.graphics.Rect(margin, margin, width - margin, height - margin)
+    }
+
+    private fun cropArgb(
+        pixels: IntArray,
+        width: Int,
+        height: Int,
+        crop: android.graphics.Rect,
+    ): Triple<IntArray, Int, Int> {
+        if (crop.left == 0 && crop.top == 0 && crop.width() == width && crop.height() == height) {
+            return Triple(pixels, width, height)
+        }
+        val cropped = IntArray(crop.width() * crop.height())
+        for (y in 0 until crop.height()) {
+            System.arraycopy(pixels, (crop.top + y) * width + crop.left, cropped, y * crop.width(), crop.width())
+        }
+        return Triple(cropped, crop.width(), crop.height())
+    }
+
+    /**
+     * Renders an imported DNG with this app's RAW pipeline instead of the platform decoder, so a
+     * re-imported capture reproduces the algorithm input the original run used.
+     */
+    private fun decodeImportedDng(file: File): ImportedRawFrame? = try {
+        val dng = DngReader.read(file)
+        val raw = Raw16Decoder.normalizeRaw16(
+            rawBuffer = dng.raw,
+            width = dng.width,
+            height = dng.height,
+            rowStride = dng.rowStride,
+            pixelStride = dng.pixelStride,
+            whiteLevel = dng.whiteLevel,
+            blackLevel = dng.blackLevel
+        )
+        applyImportedShading(dng, raw)
+        val gains = dng.whiteBalanceGains
+        val pixels = BayerDemosaic.demosaic(
+            raw, dng.width, dng.height, dng.cfaPattern,
+            rGain = gains?.getOrNull(0) ?: 1f,
+            gGain = gains?.getOrNull(1) ?: 1f,
+            bGain = gains?.getOrNull(2) ?: 1f,
+            colorMatrix = selectForwardMatrix(dng)?.let { multiply3x3(xyzD50ToSrgb, it) }
+        )
+        val (cropped, croppedWidth, croppedHeight) = cropArgb(
+            pixels, dng.width, dng.height,
+            android.graphics.Rect(
+                dng.defaultCropX,
+                dng.defaultCropY,
+                dng.defaultCropX + dng.defaultCropWidth,
+                dng.defaultCropY + dng.defaultCropHeight,
+            )
+        )
+        // A mosaic cannot carry a baked-in rotation, so the file's orientation tag is the only
+        // signal; the capture path applies the same turn before algorithms see the frame.
+        val (oriented, width, height) = rotateArgb(cropped, croppedWidth, croppedHeight, dng.orientationDegrees)
+        ImportedRawFrame(
+            pixels = oriented,
+            width = width,
+            height = height,
+            whiteLevel = dng.whiteLevel,
+            blackLevel = dng.blackLevel,
+            cfaPattern = dng.cfaPattern.id,
+            whiteBalanceGains = gains?.toList(),
+        )
+    } catch (e: Exception) {
+        Log.w("CameraViewModel", "Falling back to the platform decoder for ${file.name}", e)
+        null
+    }
+
+    private fun applyImportedShading(dng: DngImage, raw: FloatArray) {
+        if (dng.gainMaps.isEmpty()) {
+            Log.w("CameraViewModel", "Imported DNG has no GainMap opcodes; lens falloff stays uncorrected")
+            return
+        }
+        val shadingMap = GainMapCorrection.toShadingMap(dng.gainMaps, dng.cfaPattern)
+        if (shadingMap != null) {
+            LensShadingCorrection.applyInPlace(raw, dng.width, dng.height, dng.cfaPattern, shadingMap)
+        } else {
+            GainMapCorrection.applyInPlace(raw, dng.width, dng.height, dng.gainMaps)
+        }
+    }
+
+    /** Mirrors [selectForwardMatrix] for characteristics, using the DNG's own calibration tags. */
+    private fun selectForwardMatrix(dng: DngImage): FloatArray? {
+        val secondIsD65 =
+            dng.calibrationIlluminant2 == CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1_D65
+        return if (secondIsD65) {
+            dng.forwardMatrix2 ?: dng.forwardMatrix1
+        } else {
+            dng.forwardMatrix1 ?: dng.forwardMatrix2
         }
     }
 
@@ -1327,31 +1481,44 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             _isProcessing.value = true
             try {
                 val persistedImage = logTimed("persistPickedImage") { persistPickedImage(context, uri, "IMG") } ?: return@launch
-                val decoded = logTimed("decodeFile picked image") { BitmapFactory.decodeFile(persistedImage.file.absolutePath) }
-                    ?: run {
-                        persistedImage.file.delete()
-                        return@launch
+                val isRaw = persistedImage.sourceFormat == "RAW_SENSOR"
+                // A DNG must go through this app's RAW pipeline: letting the platform decode it
+                // would substitute its own demosaic, white balance and tone curve, so the frame
+                // would not reproduce the algorithm input of the capture it came from.
+                val rawFrame = if (isRaw) {
+                    logTimed("decodeImportedDng") { decodeImportedDng(persistedImage.file) }
+                } else null
+
+                val frame = rawFrame ?: run {
+                    val decoded = logTimed("decodeFile picked image") { BitmapFactory.decodeFile(persistedImage.file.absolutePath) }
+                        ?: run {
+                            persistedImage.file.delete()
+                            return@launch
+                        }
+                    val bitmap = logTimed("applyExifOrientation picked image") {
+                        applyExifOrientation(decoded, persistedImage.file.absolutePath)
                     }
-                val bitmap = logTimed("applyExifOrientation picked image") {
-                    applyExifOrientation(decoded, persistedImage.file.absolutePath)
+                    val decodedWidth = bitmap.width
+                    val decodedHeight = bitmap.height
+                    val decodedPixels = IntArray(decodedWidth * decodedHeight)
+                    try {
+                        bitmap.getPixels(decodedPixels, 0, decodedWidth, 0, 0, decodedWidth, decodedHeight)
+                    } finally {
+                        bitmap.recycle()
+                    }
+                    ImportedRawFrame(decodedPixels, decodedWidth, decodedHeight, 0, 0, 0, null)
                 }
-                val width = bitmap.width
-                val height = bitmap.height
-                val pixels = IntArray(width * height)
-                try {
-                    bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-                } finally {
-                    bitmap.recycle()
-                }
+                val width = frame.width
+                val height = frame.height
 
                 logTimedSuspend("runBenchmarks") {
                     runBenchmarks(
-                        context, persistedImage.file, getEnabledAlgorithms(), listOf(pixels), width, height,
+                        context, persistedImage.file, getEnabledAlgorithms(), listOf(frame.pixels), width, height,
                         exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
                         // The results image loader renders a DNG without honouring its TIFF orientation
                         // tag, so an imported RAW needs the same viewer-side compensation the capture
                         // path already applies. JPEG/PNG stay at 0 because the loader does honour EXIF there.
-                        originalDisplayRotation = if (persistedImage.sourceFormat == "RAW_SENSOR") {
+                        originalDisplayRotation = if (isRaw) {
                             exifRotationDegrees(persistedImage.file.absolutePath)
                         } else 0,
                         captureMetadata = CaptureMetadata(
@@ -1361,6 +1528,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             exposureTimesMs = listOf(0.0),
                             isoValues = listOf(100),
                             captureTimeMs = 0L,
+                            rawWhiteLevel = rawFrame?.whiteLevel,
+                            rawBlackLevel = rawFrame?.blackLevel,
+                            cfaPattern = rawFrame?.cfaPattern,
+                            whiteBalanceGains = rawFrame?.whiteBalanceGains,
                         )
                     )
                 }

@@ -38,25 +38,8 @@ object LensShadingCorrection {
             "Shading map has ${map.gains.size} gains, expected ${map.columns * map.rows * 4}"
         }
 
-        val rX: Int; val rY: Int
-        val bX: Int; val bY: Int
-        when (pattern) {
-            CfaPattern.RGGB -> { rX = 0; rY = 0; bX = 1; bY = 1 }
-            CfaPattern.GRBG -> { rX = 1; rY = 0; bX = 0; bY = 1 }
-            CfaPattern.GBRG -> { rX = 0; rY = 1; bX = 1; bY = 0 }
-            CfaPattern.BGGR -> { rX = 1; rY = 1; bX = 0; bY = 0 }
-        }
         // Green sharing a row with red is "even", the other green is "odd".
-        val channelAt = IntArray(4) { i ->
-            val px = i and 1
-            val py = i shr 1
-            when {
-                px == rX && py == rY -> 0
-                px == bX && py == bY -> 3
-                py == rY -> 1
-                else -> 2
-            }
-        }
+        val channelAt = IntArray(4) { i -> pattern.channelAt(i and 1, i shr 1) }
 
         val xScale = (map.columns - 1).toFloat() / (width - 1).coerceAtLeast(1)
         val colIndex = IntArray(width)
