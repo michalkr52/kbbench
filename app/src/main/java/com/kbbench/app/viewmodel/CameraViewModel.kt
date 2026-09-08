@@ -29,6 +29,7 @@ import com.kbbench.app.settings.BenchmarkSettingsStore
 import com.kbbench.algorithm.preprocessing.BayerDemosaic
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.LensShadingCorrection
+import com.kbbench.algorithm.preprocessing.Raw16Decoder
 import com.kbbench.algorithm.preprocessing.ShadingMap
 import com.kbbench.utils.RgbHistogram
 import com.kbbench.utils.calculateRgbHistogram
@@ -761,7 +762,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val plane = image.planes[0]
             val w = image.width
             val h = image.height
-            val raw = BayerDemosaic.normalizeRaw16(
+            val raw = Raw16Decoder.normalizeRaw16(
                 rawBuffer = plane.buffer,
                 width = w,
                 height = h,
