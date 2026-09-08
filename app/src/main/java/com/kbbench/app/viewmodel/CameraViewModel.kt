@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.hardware.camera2.*
 import android.hardware.camera2.params.MeteringRectangle
 import androidx.core.content.FileProvider
@@ -15,6 +16,7 @@ import android.net.Uri
 import android.os.Debug
 import android.os.Handler
 import android.os.HandlerThread
+import android.provider.OpenableColumns
 import android.util.Log
 import android.view.OrientationEventListener
 import android.view.OrientationEventListener.ORIENTATION_UNKNOWN
@@ -63,6 +65,9 @@ import java.util.zip.ZipOutputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
+
+/** DngCreator rejects thumbnails larger than this on either axis. */
+private const val DNG_THUMBNAIL_MAX_DIMENSION = 256
 
 enum class AppScreen {
     CAMERA,
@@ -580,22 +585,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 // Save first frame as the original reference
                 val firstResult = capturedFrames.first()
-                val file = logTimed("saveResult (original)") { saveResult(context, firstResult, chars) }
-
-                // Fix orientation for JPEG
-                if (!isRaw) {
-                    try {
-                        val relativeRotation = computeRelativeRotation(chars)
-                        val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-                        val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
-
-                        val exif = ExifInterface(file.absolutePath)
-                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
-                        exif.saveAttributes()
-                    } catch (e: Exception) {
-                        Log.e("CameraViewModel", "Error saving metadata", e)
-                    }
-                }
 
                 // Get RAW white/black levels from characteristics for proper normalization
                 val whiteLevel = chars.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023
@@ -624,6 +613,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     }
                 }
+
+                // Written after demosaicing so a RAW export can carry a preview built from the decoded
+                // frame; a DNG without one forces every viewer to render the mosaic itself.
+                val dngThumbnail = if (isRaw) {
+                    decodedFrames.first().let { (pixels, w, h) -> buildDngThumbnail(pixels, w, h) }
+                } else null
+                val file = try {
+                    logTimed("saveResult (original)") {
+                        saveResult(context, firstResult, chars, rotation, dngThumbnail)
+                    }
+                } finally {
+                    dngThumbnail?.recycle()
+                }
+
+                // Fix orientation for JPEG
+                if (!isRaw) {
+                    try {
+                        val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                        val exifOrientation = com.kbbench.utils.computeExifOrientation(rotation, mirrored)
+
+                        val exif = ExifInterface(file.absolutePath)
+                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, exifOrientation.toString())
+                        exif.saveAttributes()
+                    } catch (e: Exception) {
+                        Log.e("CameraViewModel", "Error saving metadata", e)
+                    }
+                }
+
                 val framePixels = logTimed("rotateArgb x${decodedFrames.size}") {
                     decodedFrames.map { (pixels, frameWidth, frameHeight) ->
                         rotateArgb(pixels, frameWidth, frameHeight, rotation)
@@ -1254,17 +1271,70 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Rotates/flips a decoded bitmap to match the file's EXIF/TIFF orientation tag, recycling the input.
+     *
+     * Decoders disagree about whether they pre-apply the tag: BitmapFactory ignores it for JPEG/PNG,
+     * but the platform RAW/DNG path can bake it in while rendering - the same DNG renders upright in
+     * Google Photos and quarter-turned in the system photo picker on this project's test device.
+     * Rather than hardcoding a per-format assumption that breaks on the next decoder, a quarter-turn
+     * tag is treated as already applied when the decoded pixels are already in the post-rotation
+     * aspect. Sensor buffers are landscape, so an upright quarter-turned capture must be portrait.
+     */
+    private fun applyExifOrientation(bitmap: Bitmap, filePath: String): Bitmap {
+        val exifOrientation = try {
+            ExifInterface(filePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } catch (e: Exception) {
+            Log.w("CameraViewModel", "Failed to read EXIF orientation: $filePath", e)
+            ExifInterface.ORIENTATION_NORMAL
+        }
+        val swapsAxes = exifOrientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+            exifOrientation == ExifInterface.ORIENTATION_ROTATE_270 ||
+            exifOrientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+            exifOrientation == ExifInterface.ORIENTATION_TRANSVERSE
+        if (swapsAxes && bitmap.height > bitmap.width) {
+            Log.d("CameraViewModel", "Decoder already applied orientation $exifOrientation: $filePath")
+            return bitmap
+        }
+        val matrix = com.kbbench.utils.decodeExifOrientation(exifOrientation)
+        if (matrix.isIdentity) return bitmap
+        return try {
+            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
+                if (it !== bitmap) bitmap.recycle()
+            }
+        } catch (e: Exception) {
+            Log.w("CameraViewModel", "Failed to apply EXIF orientation: $filePath", e)
+            bitmap
+        }
+    }
+
+    /** Degrees a viewer must rotate by to honour the file's orientation tag, for renderers that ignore it. */
+    private fun exifRotationDegrees(filePath: String): Int = try {
+        when (ExifInterface(filePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+            ExifInterface.ORIENTATION_ROTATE_90, ExifInterface.ORIENTATION_TRANSPOSE -> 90
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180
+            ExifInterface.ORIENTATION_ROTATE_270, ExifInterface.ORIENTATION_TRANSVERSE -> 270
+            else -> 0
+        }
+    } catch (e: Exception) {
+        Log.w("CameraViewModel", "Failed to read EXIF orientation: $filePath", e)
+        0
+    }
+
     /** Bypasses the camera and runs all registered algorithms on a single picked image. */
     fun loadInputFromGallery(context: Context, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             _isProcessing.value = true
             try {
                 val persistedImage = logTimed("persistPickedImage") { persistPickedImage(context, uri, "IMG") } ?: return@launch
-                val bitmap = logTimed("decodeFile picked image") { BitmapFactory.decodeFile(persistedImage.file.absolutePath) }
+                val decoded = logTimed("decodeFile picked image") { BitmapFactory.decodeFile(persistedImage.file.absolutePath) }
                     ?: run {
                         persistedImage.file.delete()
                         return@launch
                     }
+                val bitmap = logTimed("applyExifOrientation picked image") {
+                    applyExifOrientation(decoded, persistedImage.file.absolutePath)
+                }
                 val width = bitmap.width
                 val height = bitmap.height
                 val pixels = IntArray(width * height)
@@ -1278,7 +1348,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     runBenchmarks(
                         context, persistedImage.file, getEnabledAlgorithms(), listOf(pixels), width, height,
                         exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
-                        originalDisplayRotation = 0,
+                        // The results image loader renders a DNG without honouring its TIFF orientation
+                        // tag, so an imported RAW needs the same viewer-side compensation the capture
+                        // path already applies. JPEG/PNG stay at 0 because the loader does honour EXIF there.
+                        originalDisplayRotation = if (persistedImage.sourceFormat == "RAW_SENSOR") {
+                            exifRotationDegrees(persistedImage.file.absolutePath)
+                        } else 0,
                         captureMetadata = CaptureMetadata(
                             sourceFormat = persistedImage.sourceFormat,
                             width = width,
@@ -1342,14 +1417,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         prefix: String,
     ): PersistedPickedImage? {
         val mimeType = context.contentResolver.getType(uri)?.lowercase(Locale.US)
-        val extension = when (mimeType) {
-            "image/png" -> "png"
-            "image/jpeg", "image/jpg" -> "jpg"
+        // Content providers often report a null or generic mime type for DNG, so also fall back
+        // to the display name/path extension; without this a picked DNG fails the "RAW_SENSOR"
+        // check below and gets mislabeled "Camera JPEG" in the results screen.
+        val isDng = mimeType?.contains("dng") == true ||
+            queryDisplayName(context, uri)?.endsWith(".dng", ignoreCase = true) == true
+        val extension = when {
+            isDng -> "dng"
+            mimeType == "image/png" -> "png"
+            mimeType == "image/jpeg" || mimeType == "image/jpg" -> "jpg"
             else -> MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "img"
         }
-        val sourceFormat = when (mimeType) {
-            "image/png" -> "PNG"
-            "image/jpeg", "image/jpg" -> "JPEG"
+        val sourceFormat = when {
+            isDng -> "RAW_SENSOR"
+            mimeType == "image/png" -> "PNG"
+            mimeType == "image/jpeg" || mimeType == "image/jpg" -> "JPEG"
             else -> mimeType?.substringAfterLast('/')?.uppercase(Locale.US) ?: "UNKNOWN"
         }
         val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
@@ -1365,6 +1447,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (file.exists()) file.delete()
             throw e
         }
+    }
+
+    /** Resolves a content:// URI's display name (used to sniff formats mime type lookup misses). */
+    private fun queryDisplayName(context: Context, uri: Uri): String? {
+        if (uri.scheme != "content") return uri.lastPathSegment
+        return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
     }
 
     /** Rescoring all stored algorithm outputs against the current reference image, if any. */
@@ -1608,23 +1697,56 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun saveResult(context: Context, result: CombinedResult, chars: CameraCharacteristics): File {
+    /**
+     * Subsamples demosaiced pixels into a [DngCreator]-sized preview.
+     *
+     * Nearest-neighbour on the source array avoids materialising a full-resolution Bitmap, which is
+     * ~48 MiB at 12.5 MP. One integer step for both axes keeps the aspect ratio DngCreator expects.
+     */
+    private fun buildDngThumbnail(pixels: IntArray, width: Int, height: Int): Bitmap? {
+        if (width <= 0 || height <= 0 || pixels.size < width * height) return null
+        val step = ((maxOf(width, height) + DNG_THUMBNAIL_MAX_DIMENSION - 1) / DNG_THUMBNAIL_MAX_DIMENSION)
+            .coerceAtLeast(1)
+        val thumbWidth = (width / step).coerceAtLeast(1)
+        val thumbHeight = (height / step).coerceAtLeast(1)
+        val thumbPixels = IntArray(thumbWidth * thumbHeight)
+        for (y in 0 until thumbHeight) {
+            val sourceRow = (y * step) * width
+            for (x in 0 until thumbWidth) {
+                thumbPixels[y * thumbWidth + x] = pixels[sourceRow + x * step]
+            }
+        }
+        return Bitmap.createBitmap(thumbWidth, thumbHeight, Bitmap.Config.ARGB_8888).apply {
+            setPixels(thumbPixels, 0, thumbWidth, 0, 0, thumbWidth, thumbHeight)
+        }
+    }
+
+    private fun saveResult(
+        context: Context,
+        result: CombinedResult,
+        chars: CameraCharacteristics,
+        rotationDegrees: Int,
+        dngThumbnail: Bitmap? = null,
+    ): File {
         val extension = if (result.image.format == ImageFormat.RAW_SENSOR) "dng" else "jpg"
         val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
         val file = File(context.filesDir, "IMG_${sdf.format(Date())}.$extension")
 
         try {
             if (result.image.format == ImageFormat.RAW_SENSOR) {
-                val dngCreator = android.hardware.camera2.DngCreator(chars, result.metadata)
-
-                val relativeRotation = computeRelativeRotation(chars)
                 val mirrored = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-                val exifOrientation = com.kbbench.utils.computeExifOrientation(relativeRotation, mirrored)
-                dngCreator.setOrientation(exifOrientation)
-
-                FileOutputStream(file).use { dngCreator.writeImage(it, result.image) }
+                val exifOrientation = com.kbbench.utils.computeExifOrientation(rotationDegrees, mirrored)
+                android.hardware.camera2.DngCreator(chars, result.metadata).use { dngCreator ->
+                    dngCreator.setOrientation(exifOrientation)
+                    // One orientation tag covers the whole file, so the thumbnail stays sensor-native
+                    // like the mosaic it previews.
+                    dngThumbnail?.let { dngCreator.setThumbnail(it) }
+                    FileOutputStream(file).use { dngCreator.writeImage(it, result.image) }
+                }
             } else {
+                // decodeToArgb already drained this plane, so remaining() would be 0 without a rewind.
                 val buffer = result.image.planes[0].buffer
+                buffer.rewind()
                 val bytes = ByteArray(buffer.remaining()).apply { buffer.get(this) }
                 FileOutputStream(file).use { it.write(bytes) }
             }
