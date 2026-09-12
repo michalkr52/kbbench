@@ -124,8 +124,8 @@ class AdaptiveUnsharpMasking(
                 src = src,
                 width = input.width,
                 height = input.height,
-                tau1 = tau1,
-                tau2 = tau2,
+                tau1 = tau1 * VARIANCE_SCALE,
+                tau2 = tau2 * VARIANCE_SCALE,
                 alphaB = alphaB,
                 alphaDl = alphaDl,
                 alphaDh = alphaDh,
@@ -141,5 +141,15 @@ class AdaptiveUnsharpMasking(
             height = input.height,
             totalTime = processMs,
         )
+    }
+
+    private companion object {
+        /**
+         * Polesel et al. quote `tau` as a local variance of 8-bit samples and tie it to the input's
+         * noise level, so the constructor and the UI slider keep those units and the conversion to
+         * the filter's normalized domain happens here. Declaring the threshold normalized instead
+         * would put `9.2e-4` on a slider and make the paper's quoted `[30, 60]` unusable verbatim.
+         */
+        const val VARIANCE_SCALE = 1.0 / (255.0 * 255.0)
     }
 }

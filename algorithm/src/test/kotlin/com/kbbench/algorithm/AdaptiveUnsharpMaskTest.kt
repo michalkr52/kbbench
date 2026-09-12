@@ -193,8 +193,8 @@ class AdaptiveUnsharpMaskTest {
         src = src,
         width = width,
         height = height,
-        tau1 = tau1,
-        tau2 = tau2,
+        tau1 = tau1 * VARIANCE_SCALE,
+        tau2 = tau2 * VARIANCE_SCALE,
         alphaB = 1.0,
         alphaDl = 3.0,
         alphaDh = 4.0,
@@ -229,4 +229,8 @@ class AdaptiveUnsharpMaskTest {
             argb(255, v, v, v)
         }
 
+    private companion object {
+        /** Tau is quoted by the paper as an 8-bit variance; the filter takes it normalized. */
+        const val VARIANCE_SCALE = 1.0 / (255.0 * 255.0)
+    }
 }

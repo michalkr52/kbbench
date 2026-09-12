@@ -1,5 +1,6 @@
 package com.kbbench.algorithm.filter
 
+import com.kbbench.algorithm.base.Pixels
 import kotlin.math.max
 import kotlin.math.min
 
@@ -25,8 +26,6 @@ object GuidedFilter {
     private const val PLANES_GRAY = 4
     private const val PLANES_COLOR = 11
 
-    private const val ALPHA_MASK = 0xFF shl 24
-
     private val CHANNEL_SHIFTS = intArrayOf(16, 8, 0)
 
     /**
@@ -47,7 +46,7 @@ object GuidedFilter {
      *
      * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
      * @param radius Window half-width in pixels, at least 1.
-     * @param eps Regularization on the 8-bit intensity scale, strictly positive.
+     * @param eps Regularization in normalized `[0, 1]` intensity units, strictly positive.
      * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
      * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
      * @throws IllegalArgumentException if the dimensions disagree with [src], or a parameter is out
@@ -79,7 +78,7 @@ object GuidedFilter {
 
             for (shift in CHANNEL_SHIFTS) {
                 for (i in 0 until count) {
-                    guidance[i] = ((src[base + i] shr shift) and 0xFF).toFloat()
+                    guidance[i] = Pixels.channel(src[base + i], shift)
                 }
 
                 for (i in 0 until count) {
@@ -107,9 +106,8 @@ object GuidedFilter {
                     for (x in 0 until width) {
                         val i = srcRow + x
                         val p = planeRow + x
-                        val intensity = ((src[i] shr shift) and 0xFF).toFloat()
-                        val q = bufB[p] * intensity + bufA[p]
-                        out[i] = out[i] or (round(q) shl shift)
+                        val q = bufB[p] * Pixels.channel(src[i], shift) + bufA[p]
+                        out[i] = out[i] or (Pixels.quantize(q) shl shift)
                     }
                 }
             }
@@ -118,7 +116,7 @@ object GuidedFilter {
                 val row = y * width
                 for (x in 0 until width) {
                     val i = row + x
-                    out[i] = out[i] or (src[i] and ALPHA_MASK)
+                    out[i] = out[i] or (src[i] and Pixels.ALPHA_MASK)
                 }
             }
         }
@@ -136,7 +134,7 @@ object GuidedFilter {
      *
      * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
      * @param radius Window half-width in pixels, at least 1.
-     * @param eps Regularization on the 8-bit intensity scale, strictly positive.
+     * @param eps Regularization in normalized `[0, 1]` intensity units, strictly positive.
      * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
      * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
      * @throws IllegalArgumentException if the dimensions disagree with [src], or a parameter is out
@@ -170,7 +168,7 @@ object GuidedFilter {
             for (c in 0 until 3) {
                 val shift = CHANNEL_SHIFTS[c]
                 for (i in 0 until count) {
-                    plane[i] = ((src[base + i] shr shift) and 0xFF).toFloat()
+                    plane[i] = Pixels.channel(src[base + i], shift)
                 }
                 BoxFilter.mean(plane, meanI[c], scratch, width, rows, radius)
             }
@@ -180,7 +178,7 @@ object GuidedFilter {
                 val shiftL = CHANNEL_SHIFTS[COVARIANCE_PAIRS[k][1]]
                 for (i in 0 until count) {
                     val pixel = src[base + i]
-                    plane[i] = (((pixel shr shiftJ) and 0xFF) * ((pixel shr shiftL) and 0xFF)).toFloat()
+                    plane[i] = Pixels.channel(pixel, shiftJ) * Pixels.channel(pixel, shiftL)
                 }
                 BoxFilter.mean(plane, covariance[k], scratch, width, rows, radius)
 
@@ -212,18 +210,15 @@ object GuidedFilter {
                     val i = srcRow + x
                     val p = planeRow + x
                     val pixel = src[i]
-                    val r = ((pixel shr 16) and 0xFF).toFloat()
-                    val g = ((pixel shr 8) and 0xFF).toFloat()
-                    val b = (pixel and 0xFF).toFloat()
+                    val r = Pixels.red(pixel)
+                    val g = Pixels.green(pixel)
+                    val b = Pixels.blue(pixel)
 
                     val qr = aRR[p] * r + aRG[p] * g + aRB[p] * b + bR[p]
                     val qg = aRG[p] * r + aGG[p] * g + aGB[p] * b + bG[p]
                     val qb = aRB[p] * r + aGB[p] * g + aBB[p] * b + bB[p]
 
-                    out[i] = (pixel and ALPHA_MASK) or
-                        (round(qr) shl 16) or
-                        (round(qg) shl 8) or
-                        round(qb)
+                    out[i] = Pixels.pack(pixel, qr, qg, qb)
                 }
             }
         }
@@ -285,12 +280,6 @@ object GuidedFilter {
             covBB[i] = (1.0 - eps * mBB).toFloat()
         }
     }
-
-    /**
-     * @return [value] rounded to nearest and clamped to `[0, 255]`. The clamp is load-bearing:
-     *   `mean_a * I + mean_b` is not a pointwise convex combination and can overshoot at edges.
-     */
-    private fun round(value: Float): Int = (value + 0.5f).toInt().coerceIn(0, 255)
 
     /** @throws IllegalArgumentException if any argument is out of range for the filter. */
     private fun validate(src: IntArray, width: Int, height: Int, radius: Int, eps: Double) {

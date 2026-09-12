@@ -134,7 +134,7 @@ internal fun assertChannelsWithin(expected: IntArray, actual: IntArray, toleranc
  *
  * Uses the same luma-driven shared weight as the grid so the two are comparable, and truncates the
  * spatial kernel at [BILATERAL_KERNEL_RADIUS] standard deviations to match the reach of the grid's
- * five-tap blur. Cost is O(sigmaSpatial^2) per pixel, so keep the images small.
+ * five-tap blur. [sigmaRange] is in normalized `[0, 1]` units, as the grid takes it. Cost is O(sigmaSpatial^2) per pixel, so keep the images small.
  */
 internal fun bruteForceBilateral(
     src: IntArray,
@@ -191,8 +191,9 @@ internal fun bruteForceBilateral(
 /** Matches the reach of the grid's `[1, 4, 6, 4, 1]` blur, in standard deviations. */
 internal const val BILATERAL_KERNEL_RADIUS = 2
 
+/** Rec. 601 luma normalized to `[0, 1]`, matching the domain the filters compare `sigmaRange` in. */
 private fun testLuma(pixel: Int): Double =
-    0.299 * ((pixel shr 16) and 0xFF) + 0.587 * ((pixel shr 8) and 0xFF) + 0.114 * (pixel and 0xFF)
+    (0.299 * ((pixel shr 16) and 0xFF) + 0.587 * ((pixel shr 8) and 0xFF) + 0.114 * (pixel and 0xFF)) / 255.0
 
 /** Extracts a centred [size] x [size] crop, for references too costly to run on a full frame. */
 internal fun centreCrop(src: IntArray, width: Int, height: Int, size: Int): IntArray {

@@ -83,7 +83,7 @@ class GuidedFilterTest {
         val height = 18
         val src = noiseImage(width, height, seed = 4)
 
-        val actual = GuidedFilter.filterGray(src, width, height, radius = 2, eps = 1e-3)
+        val actual = GuidedFilter.filterGray(src, width, height, radius = 2, eps = 1e-8)
 
         assertChannelsWithin(src, actual, tolerance = 3)
     }
@@ -101,7 +101,7 @@ class GuidedFilterTest {
             argb(255, v, v, v)
         }
 
-        val guided = GuidedFilter.filterGray(src, width, height, radius, eps = 100.0)
+        val guided = GuidedFilter.filterGray(src, width, height, radius, eps = 1.5e-3)
         val blurred = twiceBoxFiltered(src, width, height, radius)
 
         val row = height / 2
@@ -129,8 +129,8 @@ class GuidedFilterTest {
 
         val noisyPsnr = calculateQualityMetrics(clean, noisy).psnr
         for (denoised in listOf(
-            GuidedFilter.filterGray(noisy, width, height, radius = 4, eps = 900.0),
-            GuidedFilter.filterColor(noisy, width, height, radius = 4, eps = 900.0),
+            GuidedFilter.filterGray(noisy, width, height, radius = 4, eps = 0.0138),
+            GuidedFilter.filterColor(noisy, width, height, radius = 4, eps = 0.0138),
         )) {
             val psnr = calculateQualityMetrics(clean, denoised).psnr
             assertTrue(psnr > noisyPsnr, "denoising did not improve PSNR: $noisyPsnr -> $psnr")
@@ -218,7 +218,7 @@ class GuidedFilterTest {
     }
 
     private companion object {
-        /** 0.1^2 in the paper's normalized units, carried to the 8-bit scale. */
-        const val EPS = 0.01 * 255.0 * 255.0
+        /** 0.1^2, in the paper's normalized units, which is what the filter now takes. */
+        const val EPS = 0.01
     }
 }

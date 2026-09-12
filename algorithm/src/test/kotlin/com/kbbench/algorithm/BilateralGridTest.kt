@@ -58,7 +58,7 @@ class BilateralGridTest {
         val width = 48
         val height = 36
         val sigmaSpatial = 3.0
-        val sigmaRange = 25.5
+        val sigmaRange = 0.1
         val src = withGaussianNoise(smoothImage(width, height), sigma = 12.0, seed = 31)
 
         val approximate = BilateralGrid.filter(src, width, height, sigmaSpatial, sigmaRange)
@@ -86,7 +86,7 @@ class BilateralGridTest {
             argb(255, v, v, v)
         }
 
-        val wide = BilateralGrid.filter(src, width, height, sigmaSpatial = 3.0, sigmaRange = 10_000.0)
+        val wide = BilateralGrid.filter(src, width, height, sigmaSpatial = 3.0, sigmaRange = 40.0)
 
         val step = channelStepAcrossEdge(wide, width, height / 2, edge)
         assertTrue(step <= 0.4 * (210 - 40), "range kernel did not degenerate to a blur, step was $step")
@@ -105,7 +105,7 @@ class BilateralGridTest {
             argb(255, v, v, v)
         }
 
-        val filtered = BilateralGrid.filter(src, width, height, sigmaSpatial = 3.0, sigmaRange = 25.5)
+        val filtered = BilateralGrid.filter(src, width, height, sigmaSpatial = 3.0, sigmaRange = 0.1)
 
         val step = channelStepAcrossEdge(filtered, width, height / 2, edge)
         assertTrue(step >= 0.8 * (high - low), "edge was smeared, kept $step of ${high - low}")
@@ -119,7 +119,7 @@ class BilateralGridTest {
         val noisy = withGaussianNoise(clean, sigma = 15.0, seed = 42)
 
         val noisyPsnr = calculateQualityMetrics(clean, noisy).psnr
-        val denoised = BilateralGrid.filter(noisy, width, height, sigmaSpatial = 3.0, sigmaRange = 38.0)
+        val denoised = BilateralGrid.filter(noisy, width, height, sigmaSpatial = 3.0, sigmaRange = 0.149)
         val psnr = calculateQualityMetrics(clean, denoised).psnr
 
         assertTrue(psnr > noisyPsnr, "denoising did not improve PSNR: $noisyPsnr -> $psnr")
@@ -170,6 +170,6 @@ class BilateralGridTest {
         height: Int,
         sigmaSpatial: Double,
         bandHeight: Int = 0,
-    ): IntArray = BilateralGrid.filter(src, width, height, sigmaSpatial, 25.5, bandHeight)
+    ): IntArray = BilateralGrid.filter(src, width, height, sigmaSpatial, 0.1, bandHeight)
 
 }

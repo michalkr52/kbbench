@@ -1,6 +1,7 @@
 package com.kbbench.algorithm
 
 import com.kbbench.algorithm.base.AlgorithmInput
+import com.kbbench.algorithm.base.Pixels
 import com.kbbench.algorithm.impl.AdaptiveUnsharpMasking
 import com.kbbench.algorithm.impl.LinearUnsharpMasking
 import kotlin.math.max
@@ -155,10 +156,7 @@ class LinearUnsharpMaskTest {
         lambda: Double,
         highpass: (c: Float, up: Float, down: Float, left: Float, right: Float) -> Float,
     ): IntArray {
-        val luma = FloatArray(src.size) { i ->
-            val p = src[i]
-            0.299f * ((p shr 16) and 0xFF) + 0.587f * ((p shr 8) and 0xFF) + 0.114f * (p and 0xFF)
-        }
+        val luma = FloatArray(src.size) { i -> Pixels.luma(src[i]) }
 
         return IntArray(src.size) { i ->
             val x = i % width
@@ -172,13 +170,20 @@ class LinearUnsharpMaskTest {
             )
             val correction = lambda * z
             val pixel = src[i]
-            (pixel and (0xFF shl 24)) or
-                (channel(pixel, 16, correction) shl 16) or
-                (channel(pixel, 8, correction) shl 8) or
-                channel(pixel, 0, correction)
+            Pixels.pack(
+                source = pixel,
+                r = channel(pixel, 16, correction),
+                g = channel(pixel, 8, correction),
+                b = channel(pixel, 0, correction),
+            )
         }
     }
 
-    private fun channel(pixel: Int, shift: Int, correction: Double): Int =
-        (((pixel shr shift) and 0xFF) + correction + 0.5).toInt().coerceIn(0, 255)
+    /**
+     * Deliberately reuses the production conversion. What this reference checks is Eq. (2)'s
+     * highpass and gain; sharing the pixel plumbing keeps a rounding difference in the plumbing
+     * from being reported as a divergence from the paper.
+     */
+    private fun channel(pixel: Int, shift: Int, correction: Double): Float =
+        (Pixels.channel(pixel, shift) + correction).toFloat()
 }

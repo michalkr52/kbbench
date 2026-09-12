@@ -9,6 +9,7 @@ import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
+import com.kbbench.algorithm.base.Pixels
 import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.preprocessing.TransferEncoding
@@ -114,7 +115,7 @@ class LinearUnsharpMasking(
                     val correction = lambda * z
 
                     val pixel = src[row + x]
-                    result[row + x] = (pixel and ALPHA_MASK) or
+                    result[row + x] = (pixel and Pixels.ALPHA_MASK) or
                         (corrected(pixel, 16, correction) shl 16) or
                         (corrected(pixel, 8, correction) shl 8) or
                         corrected(pixel, 0, correction)
@@ -142,22 +143,11 @@ class LinearUnsharpMasking(
     private fun loadLumaRow(src: IntArray, dst: FloatArray, width: Int, height: Int, y: Int) {
         val row = y.coerceIn(0, height - 1) * width
         for (x in 0 until width) {
-            val pixel = src[row + x]
-            dst[x] = LUMA_R * ((pixel shr 16) and 0xFF) +
-                LUMA_G * ((pixel shr 8) and 0xFF) +
-                LUMA_B * (pixel and 0xFF)
+            dst[x] = Pixels.luma(src[row + x])
         }
     }
 
-    /** Adds the luma-domain [correction] to one channel, rounding to nearest and clamping. */
+    /** Adds the luma-domain [correction] to one channel and quantizes back to the packed contract. */
     private fun corrected(pixel: Int, shift: Int, correction: Double): Int =
-        (((pixel shr shift) and 0xFF) + correction + 0.5).toInt().coerceIn(0, 255)
-
-    private companion object {
-        const val ALPHA_MASK = 0xFF shl 24
-
-        const val LUMA_R = 0.299f
-        const val LUMA_G = 0.587f
-        const val LUMA_B = 0.114f
-    }
+        Pixels.quantize((Pixels.channel(pixel, shift) + correction).toFloat())
 }

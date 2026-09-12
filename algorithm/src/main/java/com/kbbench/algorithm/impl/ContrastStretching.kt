@@ -8,13 +8,14 @@ import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
+import com.kbbench.algorithm.base.Pixels
 import com.kbbench.algorithm.base.measureMs
 
 /**
  * Single-frame contrast stretching algorithm.
  *
  * Operates on [AlgorithmInput.frames]`.first()`. For each RGB channel independently,
- * finds the min and max value across all pixels and linearly stretches it to `[0, 255]`.
+ * finds the min and max value across all pixels and linearly stretches it to the full range.
  * Alpha is preserved. If a channel is flat (min == max), it is left unchanged.
  */
 class ContrastStretching : ImageAlgorithm {
@@ -37,15 +38,15 @@ class ContrastStretching : ImageAlgorithm {
         val out = IntArray(src.size)
 
         val (_, processMs) = measureMs {
-            var rMin = 255; var rMax = 0
-            var gMin = 255; var gMax = 0
-            var bMin = 255; var bMax = 0
+            var rMin = 1f; var rMax = 0f
+            var gMin = 1f; var gMax = 0f
+            var bMin = 1f; var bMax = 0f
 
             for (i in src.indices) {
                 val p = src[i]
-                val r = (p shr 16) and 0xFF
-                val g = (p shr 8) and 0xFF
-                val b = p and 0xFF
+                val r = Pixels.red(p)
+                val g = Pixels.green(p)
+                val b = Pixels.blue(p)
                 if (r < rMin) rMin = r; if (r > rMax) rMax = r
                 if (g < gMin) gMin = g; if (g > gMax) gMax = g
                 if (b < bMin) bMin = b; if (b > bMax) bMax = b
@@ -57,16 +58,16 @@ class ContrastStretching : ImageAlgorithm {
 
             for (i in src.indices) {
                 val p = src[i]
-                val a = (p shr 24) and 0xFF
-                val r = (p shr 16) and 0xFF
-                val g = (p shr 8) and 0xFF
-                val b = p and 0xFF
+                val r = Pixels.red(p)
+                val g = Pixels.green(p)
+                val b = Pixels.blue(p)
 
-                val nr = if (rRange == 0) r else ((r - rMin) * 255) / rRange
-                val ng = if (gRange == 0) g else ((g - gMin) * 255) / gRange
-                val nb = if (bRange == 0) b else ((b - bMin) * 255) / bRange
-
-                out[i] = (a shl 24) or (nr shl 16) or (ng shl 8) or nb
+                out[i] = Pixels.pack(
+                    source = p,
+                    r = if (rRange == 0f) r else (r - rMin) / rRange,
+                    g = if (gRange == 0f) g else (g - gMin) / gRange,
+                    b = if (bRange == 0f) b else (b - bMin) / bRange,
+                )
             }
         }
 

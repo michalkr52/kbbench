@@ -8,6 +8,7 @@ import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
+import com.kbbench.algorithm.base.Pixels
 import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.preprocessing.TransferEncoding
 import kotlin.math.exp
@@ -47,9 +48,7 @@ class ExposureFusion : ImageAlgorithm {
         val out = IntArray(n)
 
         val (_, processMs) = measureMs {
-            val mean = 128.0
-            val sigma = 64.0
-            val twoSigmaSq = 2.0 * sigma * sigma
+            val twoSigmaSq = 2.0 * WELL_EXPOSED_SIGMA * WELL_EXPOSED_SIGMA
 
             for (i in 0 until n) {
                 var sumW = 0.0
@@ -59,33 +58,25 @@ class ExposureFusion : ImageAlgorithm {
 
                 for (f in frames.indices) {
                     val p = frames[f][i]
-                    val r = (p shr 16) and 0xFF
-                    val g = (p shr 8) and 0xFF
-                    val b = p and 0xFF
-                    val lum = 0.299 * r + 0.587 * g + 0.114 * b
-                    val d = lum - mean
+                    val d = Pixels.luma(p) - WELL_EXPOSED_MEAN
                     val w = exp(-(d * d) / twoSigmaSq)
                     sumW += w
-                    sumR += w * r
-                    sumG += w * g
-                    sumB += w * b
+                    sumR += w * Pixels.red(p)
+                    sumG += w * Pixels.green(p)
+                    sumB += w * Pixels.blue(p)
                 }
 
-                val a = (frames[0][i] shr 24) and 0xFF
-                val nr: Int
-                val ng: Int
-                val nb: Int
-                if (sumW > 0.0) {
-                    nr = (sumR / sumW).toInt().coerceIn(0, 255)
-                    ng = (sumG / sumW).toInt().coerceIn(0, 255)
-                    nb = (sumB / sumW).toInt().coerceIn(0, 255)
+                val reference = frames[0][i]
+                out[i] = if (sumW > 0.0) {
+                    Pixels.pack(
+                        source = reference,
+                        r = (sumR / sumW).toFloat(),
+                        g = (sumG / sumW).toFloat(),
+                        b = (sumB / sumW).toFloat(),
+                    )
                 } else {
-                    val p = frames[0][i]
-                    nr = (p shr 16) and 0xFF
-                    ng = (p shr 8) and 0xFF
-                    nb = p and 0xFF
+                    reference
                 }
-                out[i] = (a shl 24) or (nr shl 16) or (ng shl 8) or nb
             }
         }
 
@@ -95,5 +86,16 @@ class ExposureFusion : ImageAlgorithm {
             height = input.height,
             totalTime = processMs,
         )
+    }
+
+    private companion object {
+        /**
+         * The 8-bit `128` and `64` this algorithm has always used, carried across unchanged so the
+         * move to normalized units is behaviour-preserving. Mertens, Kautz and Van Reeth (2007)
+         * specify `0.2` for the well-exposedness term; expressing the constants here makes that
+         * divergence visible, but changing it is a tuning decision, not a units one.
+         */
+        const val WELL_EXPOSED_MEAN = 128.0 / 255.0
+        const val WELL_EXPOSED_SIGMA = 64.0 / 255.0
     }
 }

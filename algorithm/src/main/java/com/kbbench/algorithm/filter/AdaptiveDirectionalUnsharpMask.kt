@@ -1,5 +1,6 @@
 package com.kbbench.algorithm.filter
 
+import com.kbbench.algorithm.base.Pixels
 import kotlin.math.max
 import kotlin.math.min
 
@@ -54,26 +55,26 @@ object AdaptiveDirectionalUnsharpMask {
     /** Rows of context each band needs on either side; see the banding note above. */
     private const val HALO = 2
 
-    private const val ALPHA_MASK = 0xFF shl 24
-
     /** Centre tap of the 3x3 highpass `g` of Fig. 2; the eight neighbours are all `-1`. */
     private const val HIGHPASS_CENTER = 8.0f
 
     /**
-     * Diagonal loading of `R` before inversion, in squared intensity units. Negligible against the
-     * `1e6` and up that `R` reaches on real detail; it only bites where `G` approaches zero.
+     * Diagonal loading of `R` before inversion, in squared normalized-intensity units. `R` reaches
+     * the order of `1e3` on real detail, so this only bites where `G` approaches zero.
+     *
+     * Written as a ratio of the 8-bit value it replaced rather than as `1.5e-5`, because `R` scales
+     * with the square of the intensity range: had this been carried across unscaled it would have
+     * gone from `1e-8` of `R` to `1e-2` of `R`, changing every adapted gain without failing a test.
      */
-    private const val RIDGE = 1.0
-
-    private const val LUMA_R = 0.299f
-    private const val LUMA_G = 0.587f
-    private const val LUMA_B = 0.114f
+    private const val RIDGE = 1.0 / (255.0 * 255.0)
 
     /**
      * @param src ARGB_8888 pixels, row-major, `width * height` entries.
-     * @param tau1 Variance below which a pixel counts as smooth; tracks the input's noise level.
+     * @param tau1 Variance below which a pixel counts as smooth, in normalized `[0, 1]` intensity
+     *   units squared; tracks the input's noise level.
      *   The paper reports `[30, 60]` for its 8-bit material.
-     * @param tau2 Variance at or above which a pixel counts as high-contrast; must exceed [tau1].
+     * @param tau2 Variance at or above which a pixel counts as high-contrast, same units; must
+     *   exceed [tau1].
      * @param alphaB Dynamics multiplier in smooth areas; `>= 1`, fixed at `1` by the paper.
      * @param alphaDl Multiplier in high-contrast areas; must exceed `1`.
      * @param alphaDh Multiplier in medium-contrast areas; must exceed [alphaDl].
@@ -123,10 +124,7 @@ object AdaptiveDirectionalUnsharpMask {
             val base = s0 * width
 
             for (i in 0 until count) {
-                val pixel = src[base + i]
-                luma[i] = LUMA_R * ((pixel shr 16) and 0xFF) +
-                    LUMA_G * ((pixel shr 8) and 0xFF) +
-                    LUMA_B * (pixel and 0xFF)
+                luma[i] = Pixels.luma(src[base + i])
             }
 
             directionalLaplacians(luma, zx, zy, width, rows)
@@ -170,10 +168,12 @@ object AdaptiveDirectionalUnsharpMask {
                     // Eq. (5), written with A(n,m); Eq. (16) below then produces A(n,m+1).
                     val correction = gainX * zx[p] + gainY * zy[p]
                     val pixel = src[i]
-                    out[i] = (pixel and ALPHA_MASK) or
-                        (corrected(pixel, 16, correction) shl 16) or
-                        (corrected(pixel, 8, correction) shl 8) or
-                        corrected(pixel, 0, correction)
+                    out[i] = Pixels.pack(
+                        source = pixel,
+                        r = corrected(pixel, 16, correction),
+                        g = corrected(pixel, 8, correction),
+                        b = corrected(pixel, 0, correction),
+                    )
 
                     rXX = retain * rXX + beta * hx * hx
                     rXY = retain * rXY + beta * hx * hy
@@ -232,9 +232,9 @@ object AdaptiveDirectionalUnsharpMask {
         }
     }
 
-    /** Adds the luma-domain [correction] to one channel, rounding to nearest and clamping. */
-    private fun corrected(pixel: Int, shift: Int, correction: Double): Int =
-        (((pixel shr shift) and 0xFF) + correction + 0.5).toInt().coerceIn(0, 255)
+    /** @return the channel selected by [shift] with the luma-domain [correction] added. */
+    private fun corrected(pixel: Int, shift: Int, correction: Double): Float =
+        (Pixels.channel(pixel, shift) + correction).toFloat()
 
     private fun validate(
         src: IntArray,

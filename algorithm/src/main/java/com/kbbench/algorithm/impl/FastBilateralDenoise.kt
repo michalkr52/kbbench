@@ -32,15 +32,13 @@ import com.kbbench.algorithm.preprocessing.TransferEncoding
  */
 class FastBilateralDenoise(
     private val sigmaSpatial: Double = 16.0,
-    sigmaRange: Double = 0.1,
+    private val sigmaRange: Double = 0.1,
 ) : ImageAlgorithm {
 
     init {
         require(sigmaSpatial > 0.0) { "FastBilateral requires sigmaSpatial > 0, got $sigmaSpatial" }
         require(sigmaRange > 0.0) { "FastBilateral requires sigmaRange > 0, got $sigmaRange" }
     }
-
-    private val scaledSigmaRange: Double = sigmaRange * 255.0
 
     override val metadata: AlgorithmMetadata = AlgorithmMetadata(
         name = "FastBilateral",
@@ -93,7 +91,7 @@ class FastBilateralDenoise(
                 width = input.width,
                 height = input.height,
                 sigmaSpatial = sigmaSpatial,
-                sigmaRange = scaledSigmaRange,
+                sigmaRange = sigmaRange,
             )
         }
 
