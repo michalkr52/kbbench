@@ -28,14 +28,13 @@ import androidx.lifecycle.viewModelScope
 import com.kbbench.algorithm.base.*
 import com.kbbench.algorithm.impl.AlgorithmRegistry
 import com.kbbench.app.settings.BenchmarkSettingsStore
-import com.kbbench.algorithm.preprocessing.BayerDemosaic
+import com.kbbench.algorithm.preprocessing.AppliedLensShading
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.DngImage
 import com.kbbench.algorithm.preprocessing.DngReader
-import com.kbbench.algorithm.preprocessing.GainMapCorrection
-import com.kbbench.algorithm.preprocessing.LensShadingCorrection
-import com.kbbench.algorithm.preprocessing.Raw16Decoder
+import com.kbbench.algorithm.preprocessing.RawPreprocessor
 import com.kbbench.algorithm.preprocessing.ShadingMap
+import com.kbbench.algorithm.preprocessing.WhiteBalanceGains
 import com.kbbench.utils.RgbHistogram
 import com.kbbench.utils.calculateRgbHistogram
 import com.kbbench.utils.centerCropAndScale
@@ -838,32 +837,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val plane = image.planes[0]
             val w = image.width
             val h = image.height
-            val raw = Raw16Decoder.normalizeRaw16(
+            val processed = RawPreprocessor.process(
                 rawBuffer = plane.buffer,
                 width = w,
                 height = h,
                 rowStride = plane.rowStride,
                 pixelStride = plane.pixelStride,
                 whiteLevel = whiteLevel,
-                blackLevel = blackLevel
-            )
-            val bayerPattern = CfaPattern.fromId(cfaPattern)
-            if (shadingMap != null) {
-                LensShadingCorrection.applyInPlace(raw, w, h, bayerPattern, shadingMap)
-            }
-            // White balance gains and the colour transform are applied inside demosaic (float domain)
-            // to avoid re-quantizing already-8-bit values, which produced comb-like histogram spikes.
-            // Both are supplied by the caller so every frame of a bracket shares one colour space.
-            val pixels = BayerDemosaic.demosaic(
-                raw, w, h, bayerPattern,
-                rGain = whiteBalanceGains?.getOrNull(0) ?: 1f,
-                gGain = whiteBalanceGains?.getOrNull(1) ?: 1f,
-                bGain = whiteBalanceGains?.getOrNull(2) ?: 1f,
-                colorMatrix = colorMatrix
+                blackLevel = blackLevel,
+                pattern = CfaPattern.fromId(cfaPattern),
+                whiteBalanceGains = preprocessingGains(whiteBalanceGains),
+                colorMatrix = colorMatrix,
+                shadingMap = shadingMap,
             )
 
-            Triple(pixels, w, h)
+            Triple(processed.pixels, w, h)
         }
+    }
+
+    private fun preprocessingGains(gains: FloatArray?): WhiteBalanceGains? = gains?.let {
+        WhiteBalanceGains(
+            red = it.getOrNull(0) ?: 1f,
+            green = it.getOrNull(1) ?: 1f,
+            blue = it.getOrNull(2) ?: 1f,
+        )
     }
 
     /**
@@ -901,26 +898,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun decodeImportedDng(file: File): ImportedRawFrame? = try {
         val dng = DngReader.read(file)
-        val raw = Raw16Decoder.normalizeRaw16(
+        val gains = dng.whiteBalanceGains
+        val processed = RawPreprocessor.process(
             rawBuffer = dng.raw,
             width = dng.width,
             height = dng.height,
             rowStride = dng.rowStride,
             pixelStride = dng.pixelStride,
             whiteLevel = dng.whiteLevel,
-            blackLevel = dng.blackLevel
+            blackLevel = dng.blackLevel,
+            pattern = dng.cfaPattern,
+            whiteBalanceGains = preprocessingGains(gains),
+            colorMatrix = selectForwardMatrix(dng)?.let { multiply3x3(xyzD50ToSrgb, it) },
+            gainMaps = dng.gainMaps,
         )
-        applyImportedShading(dng, raw)
-        val gains = dng.whiteBalanceGains
-        val pixels = BayerDemosaic.demosaic(
-            raw, dng.width, dng.height, dng.cfaPattern,
-            rGain = gains?.getOrNull(0) ?: 1f,
-            gGain = gains?.getOrNull(1) ?: 1f,
-            bGain = gains?.getOrNull(2) ?: 1f,
-            colorMatrix = selectForwardMatrix(dng)?.let { multiply3x3(xyzD50ToSrgb, it) }
-        )
+        if (processed.settings.lensShading == AppliedLensShading.UNAVAILABLE) {
+            Log.w("CameraViewModel", "Imported DNG has no usable GainMap opcodes; lens falloff stays uncorrected")
+        }
         val (cropped, croppedWidth, croppedHeight) = cropArgb(
-            pixels, dng.width, dng.height,
+            processed.pixels, dng.width, dng.height,
             android.graphics.Rect(
                 dng.defaultCropX,
                 dng.defaultCropY,
@@ -943,19 +939,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     } catch (e: Exception) {
         Log.w("CameraViewModel", "Falling back to the platform decoder for ${file.name}", e)
         null
-    }
-
-    private fun applyImportedShading(dng: DngImage, raw: FloatArray) {
-        if (dng.gainMaps.isEmpty()) {
-            Log.w("CameraViewModel", "Imported DNG has no GainMap opcodes; lens falloff stays uncorrected")
-            return
-        }
-        val shadingMap = GainMapCorrection.toShadingMap(dng.gainMaps, dng.cfaPattern)
-        if (shadingMap != null) {
-            LensShadingCorrection.applyInPlace(raw, dng.width, dng.height, dng.cfaPattern, shadingMap)
-        } else {
-            GainMapCorrection.applyInPlace(raw, dng.width, dng.height, dng.gainMaps)
-        }
     }
 
     /** Mirrors [selectForwardMatrix] for characteristics, using the DNG's own calibration tags. */

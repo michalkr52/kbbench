@@ -11,8 +11,8 @@ object BayerDemosaic {
     /**
      * Demosaics a RAW image represented as normalized floats (0..1) into ARGB_8888 pixels.
      *
-     * Stage order is white balance -> [colorMatrix] -> sRGB OETF -> single 8-bit quantization, all in
-     * the float domain so the result stays injective per input level. Applying any of these to
+    * Stage order is white balance -> [colorMatrix] -> exposure -> transfer -> 8-bit quantization,
+    * with float intermediates until the output is encoded. Applying any of these to
      * already-quantized 8-bit values instead would truncate repeatedly and produce comb-like
      * gaps/spikes per channel in the output histogram.
      *
@@ -28,7 +28,8 @@ object BayerDemosaic {
         rGain: Float = 1f,
         gGain: Float = 1f,
         bGain: Float = 1f,
-        colorMatrix: FloatArray? = null
+        colorMatrix: FloatArray? = null,
+        config: PreprocessingConfig = PreprocessingConfig(),
     ): IntArray {
         val rX: Int; val rY: Int
         val bX: Int; val bY: Int
@@ -38,9 +39,12 @@ object BayerDemosaic {
             CfaPattern.GBRG -> { rX = 0; rY = 1; bX = 1; bY = 0 }
             CfaPattern.BGGR -> { rX = 1; rY = 1; bX = 0; bY = 0 }
         }
-        val normR = rGain / gGain
-        val normB = bGain / gGain
+        val gains = config.resolveWhiteBalance(WhiteBalanceGains(rGain, gGain, bGain))
+        val normR = gains.red
+        val normB = gains.blue
         val m = colorMatrix?.let { ColorTransform.normalizeRows(it) }
+        val exposure = config.exposureMultiplier
+        val curve = config.transferCurve
 
         val pixels = IntArray(width * height)
         for (y in 0 until height) {
@@ -75,7 +79,8 @@ object BayerDemosaic {
                 var lr = r * normR
                 var lg = g
                 var lb = b * normB
-                if (maxOf(r, g, b) >= RAW_CLIP_THRESHOLD) {
+                if (config.highlights == HighlightMode.NEUTRALIZE_CLIPPED &&
+                    maxOf(r, g, b) >= RAW_CLIP_THRESHOLD) {
                     // A raw-clipped channel means its true brightness is unknown, so scaling it
                     // by normR/normB (typically > 1) while G stays unscaled tints blown highlights
                     // magenta instead of white. Render clipped highlights neutral instead.
@@ -89,9 +94,9 @@ object BayerDemosaic {
                     lr = tr; lg = tg; lb = tb
                 }
 
-                val ri = ColorTransform.encodeSrgb8(lr)
-                val gi = ColorTransform.encodeSrgb8(lg)
-                val bi = ColorTransform.encodeSrgb8(lb)
+                val ri = curve.encode8(lr * exposure)
+                val gi = curve.encode8(lg * exposure)
+                val bi = curve.encode8(lb * exposure)
                 pixels[y * width + x] = (0xFF shl 24) or (ri shl 16) or (gi shl 8) or bi
             }
         }

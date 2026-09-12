@@ -81,6 +81,11 @@ object GainMapCorrection {
      * equivalent correction sits in the capture pipeline.
      */
     fun applyInPlace(raw: FloatArray, width: Int, height: Int, maps: List<GainMap>) {
+        applyAndCountInPlace(raw, width, height, maps)
+    }
+
+    internal fun applyAndCountInPlace(raw: FloatArray, width: Int, height: Int, maps: List<GainMap>): Int {
+        var appliedCount = 0
         for (map in maps) {
             if (map.planes != 1 || map.plane != 0 || map.mapPlanes != 1) continue
             if (map.mapPointsH < 1 || map.mapPointsV < 1) continue
@@ -133,6 +138,8 @@ object GainMapCorrection {
                 }
                 row += rowPitch
             }
+            appliedCount++
         }
+        return appliedCount
     }
 }
