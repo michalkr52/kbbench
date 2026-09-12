@@ -1808,7 +1808,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         0
     }
 
-    /** Bypasses the camera and runs all registered algorithms on a single picked image. */
+    /** Bypasses the camera and runs the currently enabled algorithms on a single picked image. */
     fun loadInputFromGallery(context: Context, uri: Uri) {
         if (_isProcessing.value) return
         val profile = _preprocessingConfig.value
