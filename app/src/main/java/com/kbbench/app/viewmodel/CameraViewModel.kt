@@ -1393,6 +1393,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
+        // Both decode paths hand over ARGB_8888 today: JPEG through BitmapFactory, and RAW because
+        // ColorTransform.encodeSrgb8 still quantizes at the end of the demosaic. Promoting here is
+        // lossless, and this single conversion point is where the real sensor depth will be threaded
+        // through once the RAW pipeline emits it.
+        val sourceFrames = frames.map { Frame.fromArgb(it, width, height, sourceDepth = 8) }
+
         for (algo in algorithms) {
             val minFrames = algo.metadata.frameRequirements.minFrames
             if (frames.size < minFrames) {
@@ -1402,10 +1408,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             // Single-frame algorithms get first frame; multi-frame get all available
             val inputFrames = if (minFrames == 1 && algo.metadata.frameRequirements.maxFrames == 1) {
-                listOf(frames.first())
+                listOf(sourceFrames.first())
             } else {
-                val max = algo.metadata.frameRequirements.maxFrames ?: frames.size
-                frames.take(max)
+                val max = algo.metadata.frameRequirements.maxFrames ?: sourceFrames.size
+                sourceFrames.take(max)
             }
             val inputFrameIndices = if (inputFrames.size == 1) {
                 listOf(0)
@@ -1415,8 +1421,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             val input = AlgorithmInput(
                 frames = inputFrames,
-                width = width,
-                height = height,
                 exposureTimes = exposureTimes.take(inputFrames.size),
                 isoValues = isoValues.take(inputFrames.size),
                 captureTimeMs = captureTimeMs,
@@ -1429,10 +1433,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val effective = algo.metadata.parameters.effectiveValues(overrides)
                 val configured = algo.withParameters(overrides)
                 val output = logTimed("algo.process(${algo.name})") { configured.process(input) }
-                require(output.pixels.size == output.width * output.height) {
-                    "${algo.name} returned ${output.pixels.size} pixels for ${output.width}x${output.height}"
+                require(output.frame.size == output.width * output.height) {
+                    "${algo.name} returned ${output.frame.size} pixels for ${output.width}x${output.height}"
                 }
-                Log.d("Perf", "algo.output(${algo.name}): ${output.width}x${output.height}, ${output.pixels.size} pixels")
+                Log.d("Perf", "algo.output(${algo.name}): ${output.width}x${output.height}, ${output.frame.size} pixels")
                 logMemory("after algo.process(${algo.name})")
                 val id = algo.name.lowercase(Locale.US)
 
@@ -1463,7 +1467,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // Copy pixels into a Bitmap now: on API 26+ bitmap pixel data lives in the native
                 // heap, so retained outputs stop counting against the per-app Java heap limit that
                 // 12.5MP IntArrays exhausted once several algorithms were enabled.
-                val outBitmap = ArgbPng.bitmap(output.pixels, output.width, output.height)
+                val outBitmap = ArgbPng.bitmap(output.frame.toArgb(), output.width, output.height)
                 pendingOutputSaves.add(Triple(algo.name, outFile, outBitmap))
 
                 outputRecords.add(AlgorithmOutputRecord(id, displayFile.absolutePath, output.totalTime, effective))

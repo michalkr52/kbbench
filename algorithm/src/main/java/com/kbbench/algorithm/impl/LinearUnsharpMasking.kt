@@ -9,7 +9,7 @@ import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
-import com.kbbench.algorithm.base.Pixels
+import com.kbbench.algorithm.base.Frame
 import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.preprocessing.TransferEncoding
@@ -81,19 +81,12 @@ class LinearUnsharpMasking(
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
-        require(input.frames.isNotEmpty()) { "LinearUnsharpMask requires at least one frame" }
-
-        val width = input.width
-        val height = input.height
         val src = input.frames.first()
-
-        require(width > 0 && height > 0) { "Image must be non-empty, got ${width}x$height" }
-        require(src.size == width * height) {
-            "Pixel array of ${src.size} does not match ${width}x$height"
-        }
+        val width = src.width
+        val height = src.height
 
         val (out, processMs) = measureMs {
-            val result = IntArray(src.size)
+            val result = src.emptyLike()
 
             // Rows y-1, y and y+1 of the luma plane, rotated as the scan advances.
             var above = FloatArray(width)
@@ -114,11 +107,10 @@ class LinearUnsharpMasking(
                         current[min(width - 1, x + 1)]
                     val correction = lambda * z
 
-                    val pixel = src[row + x]
-                    result[row + x] = (pixel and Pixels.ALPHA_MASK) or
-                        (corrected(pixel, 16, correction) shl 16) or
-                        (corrected(pixel, 8, correction) shl 8) or
-                        corrected(pixel, 0, correction)
+                    val i = row + x
+                    result.red[i] = corrected(src.r(i), correction)
+                    result.green[i] = corrected(src.g(i), correction)
+                    result.blue[i] = corrected(src.b(i), correction)
                 }
 
                 val recycled = above
@@ -131,23 +123,18 @@ class LinearUnsharpMasking(
             result
         }
 
-        return AlgorithmOutput(
-            pixels = out,
-            width = width,
-            height = height,
-            totalTime = processMs,
-        )
+        return AlgorithmOutput(frame = out, totalTime = processMs)
     }
 
     /** Fills [dst] with row [y] of the luma plane; [y] is clamped, which replicates the border. */
-    private fun loadLumaRow(src: IntArray, dst: FloatArray, width: Int, height: Int, y: Int) {
+    private fun loadLumaRow(src: Frame, dst: FloatArray, width: Int, height: Int, y: Int) {
         val row = y.coerceIn(0, height - 1) * width
         for (x in 0 until width) {
-            dst[x] = Pixels.luma(src[row + x])
+            dst[x] = src.luma(row + x)
         }
     }
 
-    /** Adds the luma-domain [correction] to one channel and quantizes back to the packed contract. */
-    private fun corrected(pixel: Int, shift: Int, correction: Double): Int =
-        Pixels.quantize((Pixels.channel(pixel, shift) + correction).toFloat())
+    /** @return [level] with the luma-domain [correction] added, stored at the internal scale. */
+    private fun corrected(level: Float, correction: Double): Short =
+        Frame.store((level + correction).toFloat())
 }

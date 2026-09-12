@@ -55,20 +55,18 @@ class DenoiseGroundTruthTest {
             for ((name, algorithm) in denoisers) {
                 val output = algorithm.process(
                     AlgorithmInput(
-                        frames = listOf(pair.noisy.pixels),
-                        width = pair.noisy.width,
-                        height = pair.noisy.height,
+                        frames = listOf(frameOf(pair.noisy.pixels, pair.noisy.width, pair.noisy.height)),
                         exposureTimes = listOf(10_000_000L),
                         isoValues = listOf(100),
                         captureTimeMs = 0L,
                     )
                 )
-                row[name] = calculateQualityMetrics(pair.clean.pixels, output.pixels).psnr
+                row[name] = calculateQualityMetrics(pair.clean.pixels, output.frame.toArgb()).psnr
                 totalMs[name] = (totalMs[name] ?: 0L) + output.totalTime
 
                 if (pair === ordered.first()) {
                     writePng(
-                        output.pixels, pair.noisy.width, pair.noisy.height,
+                        output.frame.toArgb(), pair.noisy.width, pair.noisy.height,
                         File("build/test-output/denoised_${name.lowercase()}_${pair.name}.png"),
                     )
                 }

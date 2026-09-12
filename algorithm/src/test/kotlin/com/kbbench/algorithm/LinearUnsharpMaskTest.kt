@@ -1,7 +1,7 @@
 package com.kbbench.algorithm
 
 import com.kbbench.algorithm.base.AlgorithmInput
-import com.kbbench.algorithm.base.Pixels
+import com.kbbench.algorithm.base.Frame
 import com.kbbench.algorithm.impl.AdaptiveUnsharpMasking
 import com.kbbench.algorithm.impl.LinearUnsharpMasking
 import kotlin.math.max
@@ -91,8 +91,8 @@ class LinearUnsharpMaskTest {
         )
         val input = inputOf(flat, width, height)
 
-        val linear = LinearUnsharpMasking().process(input).pixels
-        val adaptive = AdaptiveUnsharpMasking().process(input).pixels
+        val linear = LinearUnsharpMasking().process(input).frame.toArgb()
+        val adaptive = AdaptiveUnsharpMasking().process(input).frame.toArgb()
 
         val before = computeMetrics(flat).lumaStd
         val after = computeMetrics(linear).lumaStd
@@ -102,7 +102,7 @@ class LinearUnsharpMaskTest {
     }
 
     @Test
-    fun preservesAlphaAndDimensions() {
+    fun outputIsOpaqueAndKeepsDimensions() {
         val width = 15
         val height = 9
         val random = Random(8)
@@ -114,9 +114,9 @@ class LinearUnsharpMaskTest {
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
-        assertEquals(width * height, output.pixels.size)
-        for (i in src.indices) {
-            assertEquals(src[i] ushr 24, output.pixels[i] ushr 24, "alpha changed at index $i")
+        assertEquals(width * height, output.frame.size)
+        for (pixel in output.frame.toArgb()) {
+            assertEquals(0xFF, pixel ushr 24, "Frame carries no alpha, so output must be opaque")
         }
     }
 
@@ -137,12 +137,10 @@ class LinearUnsharpMaskTest {
     }
 
     private fun sharpen(src: IntArray, width: Int, height: Int, lambda: Double = 0.5): IntArray =
-        LinearUnsharpMasking(lambda).process(inputOf(src, width, height)).pixels
+        LinearUnsharpMasking(lambda).process(inputOf(src, width, height)).frame.toArgb()
 
     private fun inputOf(src: IntArray, width: Int, height: Int) = AlgorithmInput(
-        frames = listOf(src),
-        width = width,
-        height = height,
+        frames = listOf(frameOf(src, width, height)),
         exposureTimes = listOf(10_000_000L),
         isoValues = listOf(100),
         captureTimeMs = 0L,
@@ -156,9 +154,11 @@ class LinearUnsharpMaskTest {
         lambda: Double,
         highpass: (c: Float, up: Float, down: Float, left: Float, right: Float) -> Float,
     ): IntArray {
-        val luma = FloatArray(src.size) { i -> Pixels.luma(src[i]) }
+        val frame = frameOf(src, width, height)
+        val out = frame.emptyLike()
+        val luma = FloatArray(frame.size) { i -> frame.luma(i) }
 
-        return IntArray(src.size) { i ->
+        for (i in 0 until frame.size) {
             val x = i % width
             val y = i / width
             val z = highpass(
@@ -169,14 +169,11 @@ class LinearUnsharpMaskTest {
                 luma[y * width + min(width - 1, x + 1)],
             )
             val correction = lambda * z
-            val pixel = src[i]
-            Pixels.pack(
-                source = pixel,
-                r = channel(pixel, 16, correction),
-                g = channel(pixel, 8, correction),
-                b = channel(pixel, 0, correction),
-            )
+            out.red[i] = channel(frame.r(i), correction)
+            out.green[i] = channel(frame.g(i), correction)
+            out.blue[i] = channel(frame.b(i), correction)
         }
+        return out.toArgb()
     }
 
     /**
@@ -184,6 +181,6 @@ class LinearUnsharpMaskTest {
      * highpass and gain; sharing the pixel plumbing keeps a rounding difference in the plumbing
      * from being reported as a divergence from the paper.
      */
-    private fun channel(pixel: Int, shift: Int, correction: Double): Float =
-        (Pixels.channel(pixel, shift) + correction).toFloat()
+    private fun channel(level: Float, correction: Double): Short =
+        Frame.store((level + correction).toFloat())
 }

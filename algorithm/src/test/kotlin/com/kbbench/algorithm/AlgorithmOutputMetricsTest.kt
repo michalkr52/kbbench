@@ -15,38 +15,37 @@ import kotlin.test.assertTrue
 class AlgorithmOutputMetricsTest {
 
     @Test
-    fun outputKeepsTheInputGeometryAndAlpha() {
+    fun outputKeepsTheInputGeometryAndIsOpaque() {
         forEachAlgorithm { name, input, output ->
             assertEquals(input.width, output.width, "$name changed the width")
             assertEquals(input.height, output.height, "$name changed the height")
-            assertEquals(input.width * input.height, output.pixels.size, "$name sized its output wrongly")
+            assertEquals(input.width * input.height, output.frame.size, "$name sized its output wrongly")
 
-            val source = input.frames.first()
-            for (i in source.indices) {
-                assertEquals(
-                    source[i] ushr 24,
-                    output.pixels[i] ushr 24,
-                    "$name changed alpha at index $i",
-                )
+            // Frame carries no alpha, so everything the pipeline emits is opaque by construction.
+            for (pixel in output.frame.toArgb()) {
+                assertEquals(0xFF, pixel ushr 24, "$name emitted a non-opaque pixel")
             }
         }
     }
 
     /**
-     * `runBenchmarks` hands the same frame arrays to every enabled algorithm in turn, so one that
-     * filtered in place would silently corrupt the input of all the algorithms after it — and the
-     * corruption would depend on registry order.
+     * `runBenchmarks` hands the same frames to every enabled algorithm in turn, so one that filtered
+     * in place would silently corrupt the input of all the algorithms after it -- and the corruption
+     * would depend on registry order.
      */
     @Test
     fun processDoesNotMutateItsInput() {
         for (algorithm in AlgorithmRegistry().getAll()) {
             val input = fixture()
-            val untouched = input.frames.map { it.copyOf() }
+            val untouched = input.frames.map { Triple(it.red.copyOf(), it.green.copyOf(), it.blue.copyOf()) }
 
             algorithm.process(input)
 
             for ((index, before) in untouched.withIndex()) {
-                assertContentEquals(before, input.frames[index], "${algorithm.name} mutated frame $index")
+                val frame = input.frames[index]
+                assertContentEquals(before.first, frame.red, "${algorithm.name} mutated red of frame $index")
+                assertContentEquals(before.second, frame.green, "${algorithm.name} mutated green of frame $index")
+                assertContentEquals(before.third, frame.blue, "${algorithm.name} mutated blue of frame $index")
             }
         }
     }
@@ -55,9 +54,21 @@ class AlgorithmOutputMetricsTest {
     @Test
     fun processIsDeterministic() {
         for (algorithm in AlgorithmRegistry().getAll()) {
-            val first = algorithm.process(fixture()).pixels
-            val second = algorithm.process(fixture()).pixels
+            val first = algorithm.process(fixture()).frame.toArgb()
+            val second = algorithm.process(fixture()).frame.toArgb()
             assertContentEquals(first, second, "${algorithm.name} is not deterministic")
+        }
+    }
+
+    /** The reported depth describes where the data came from and must survive the algorithm. */
+    @Test
+    fun outputReportsTheSourceDepthItWasGiven() {
+        forEachAlgorithm { name, input, output ->
+            assertEquals(
+                input.frames.first().sourceDepth,
+                output.frame.sourceDepth,
+                "$name lost the source depth",
+            )
         }
     }
 
@@ -89,13 +100,6 @@ class AlgorithmOutputMetricsTest {
                 (p and 0xFF) / 3,
             )
         }
-        return AlgorithmInput(
-            frames = listOf(bright, dark),
-            width = width,
-            height = height,
-            exposureTimes = listOf(10_000_000L, 3_300_000L),
-            isoValues = listOf(100, 100),
-            captureTimeMs = 0L,
-        )
+        return inputOf(width, height, bright, dark)
     }
 }

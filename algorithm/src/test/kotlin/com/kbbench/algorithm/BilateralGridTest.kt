@@ -61,7 +61,7 @@ class BilateralGridTest {
         val sigmaRange = 0.1
         val src = withGaussianNoise(smoothImage(width, height), sigma = 12.0, seed = 31)
 
-        val approximate = BilateralGrid.filter(src, width, height, sigmaSpatial, sigmaRange)
+        val approximate = BilateralGrid.filter(frameOf(src, width, height), sigmaSpatial, sigmaRange).toArgb()
         val exact = bruteForceBilateral(src, width, height, sigmaSpatial, sigmaRange)
 
         val psnr = calculateQualityMetrics(referencePixels = exact, candidatePixels = approximate).psnr
@@ -86,7 +86,7 @@ class BilateralGridTest {
             argb(255, v, v, v)
         }
 
-        val wide = BilateralGrid.filter(src, width, height, sigmaSpatial = 3.0, sigmaRange = 40.0)
+        val wide = BilateralGrid.filter(frameOf(src, width, height), sigmaSpatial = 3.0, sigmaRange = 40.0).toArgb()
 
         val step = channelStepAcrossEdge(wide, width, height / 2, edge)
         assertTrue(step <= 0.4 * (210 - 40), "range kernel did not degenerate to a blur, step was $step")
@@ -105,7 +105,7 @@ class BilateralGridTest {
             argb(255, v, v, v)
         }
 
-        val filtered = BilateralGrid.filter(src, width, height, sigmaSpatial = 3.0, sigmaRange = 0.1)
+        val filtered = BilateralGrid.filter(frameOf(src, width, height), sigmaSpatial = 3.0, sigmaRange = 0.1).toArgb()
 
         val step = channelStepAcrossEdge(filtered, width, height / 2, edge)
         assertTrue(step >= 0.8 * (high - low), "edge was smeared, kept $step of ${high - low}")
@@ -119,14 +119,14 @@ class BilateralGridTest {
         val noisy = withGaussianNoise(clean, sigma = 15.0, seed = 42)
 
         val noisyPsnr = calculateQualityMetrics(clean, noisy).psnr
-        val denoised = BilateralGrid.filter(noisy, width, height, sigmaSpatial = 3.0, sigmaRange = 0.149)
+        val denoised = BilateralGrid.filter(frameOf(noisy, width, height), sigmaSpatial = 3.0, sigmaRange = 0.149).toArgb()
         val psnr = calculateQualityMetrics(clean, denoised).psnr
 
         assertTrue(psnr > noisyPsnr, "denoising did not improve PSNR: $noisyPsnr -> $psnr")
     }
 
     @Test
-    fun preservesAlphaAndDimensions() {
+    fun outputIsOpaqueAndKeepsDimensions() {
         val width = 15
         val height = 9
         val random = kotlin.random.Random(8)
@@ -134,9 +134,7 @@ class BilateralGridTest {
             argb(random.nextInt(256), random.nextInt(256), random.nextInt(256), random.nextInt(256))
         }
         val input = AlgorithmInput(
-            frames = listOf(src),
-            width = width,
-            height = height,
+            frames = listOf(frameOf(src, width, height)),
             exposureTimes = listOf(10_000_000L),
             isoValues = listOf(100),
             captureTimeMs = 0L,
@@ -146,9 +144,9 @@ class BilateralGridTest {
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
-        assertEquals(width * height, output.pixels.size)
-        for (i in src.indices) {
-            assertEquals(src[i] ushr 24, output.pixels[i] ushr 24, "alpha changed at index $i")
+        assertEquals(width * height, output.frame.size)
+        for (pixel in output.frame.toArgb()) {
+            assertEquals(0xFF, pixel ushr 24, "Frame carries no alpha, so output must be opaque")
         }
     }
 
@@ -156,9 +154,9 @@ class BilateralGridTest {
     fun rejectsDegenerateParameters() {
         val src = IntArray(16) { argb(255, 10, 10, 10) }
 
-        assertFailsWith<IllegalArgumentException> { BilateralGrid.filter(src, 4, 4, 0.0, 25.0) }
-        assertFailsWith<IllegalArgumentException> { BilateralGrid.filter(src, 4, 4, 3.0, 0.0) }
-        assertFailsWith<IllegalArgumentException> { BilateralGrid.filter(src, 5, 4, 3.0, 25.0) }
+        assertFailsWith<IllegalArgumentException> { BilateralGrid.filter(frameOf(src, 4, 4), 0.0, 25.0).toArgb() }
+        assertFailsWith<IllegalArgumentException> { BilateralGrid.filter(frameOf(src, 4, 4), 3.0, 0.0).toArgb() }
+        assertFailsWith<IllegalArgumentException> { BilateralGrid.filter(frameOf(src, 5, 4), 3.0, 25.0).toArgb() }
 
         assertFailsWith<IllegalArgumentException> { FastBilateralDenoise(sigmaSpatial = 0.0) }
         assertFailsWith<IllegalArgumentException> { FastBilateralDenoise(sigmaRange = -0.1) }
@@ -170,6 +168,6 @@ class BilateralGridTest {
         height: Int,
         sigmaSpatial: Double,
         bandHeight: Int = 0,
-    ): IntArray = BilateralGrid.filter(src, width, height, sigmaSpatial, 0.1, bandHeight)
+    ): IntArray = BilateralGrid.filter(frameOf(src, width, height), sigmaSpatial, 0.1, bandHeight).toArgb()
 
 }

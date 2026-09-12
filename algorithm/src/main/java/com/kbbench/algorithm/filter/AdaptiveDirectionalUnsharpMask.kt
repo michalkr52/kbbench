@@ -1,6 +1,6 @@
 package com.kbbench.algorithm.filter
 
-import com.kbbench.algorithm.base.Pixels
+import com.kbbench.algorithm.base.Frame
 import kotlin.math.max
 import kotlin.math.min
 
@@ -69,7 +69,6 @@ object AdaptiveDirectionalUnsharpMask {
     private const val RIDGE = 1.0 / (255.0 * 255.0)
 
     /**
-     * @param src ARGB_8888 pixels, row-major, `width * height` entries.
      * @param tau1 Variance below which a pixel counts as smooth, in normalized `[0, 1]` intensity
      *   units squared; tracks the input's noise level.
      *   The paper reports `[30, 60]` for its 8-bit material.
@@ -83,13 +82,11 @@ object AdaptiveDirectionalUnsharpMask {
      * @param beta Forgetting factor of Eq. (17), strictly inside `(0, 1)`.
      * @param maxGain Upper clamp on either scaling factor; must be positive.
      * @param bandHeight Rows produced per band; `0` picks a value from [TARGET_WORKING_BYTES].
-     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
-     * @throws IllegalArgumentException if the dimensions or any parameter fall outside the above.
+     * @return a new frame of the same geometry and reported depth.
+     * @throws IllegalArgumentException if any parameter falls outside the above.
      */
     fun sharpen(
-        src: IntArray,
-        width: Int,
-        height: Int,
+        src: Frame,
         tau1: Double,
         tau2: Double,
         alphaB: Double,
@@ -99,10 +96,12 @@ object AdaptiveDirectionalUnsharpMask {
         beta: Double,
         maxGain: Double,
         bandHeight: Int = 0,
-    ): IntArray {
-        validate(src, width, height, tau1, tau2, alphaB, alphaDl, alphaDh, mu, beta, maxGain)
+    ): Frame {
+        validate(tau1, tau2, alphaB, alphaDl, alphaDh, mu, beta, maxGain)
 
-        val out = IntArray(src.size)
+        val width = src.width
+        val height = src.height
+        val out = src.emptyLike()
         val band = resolveBandHeight(bandHeight, width, height)
         val capacity = width * min(height, band + 2 * HALO)
 
@@ -124,7 +123,7 @@ object AdaptiveDirectionalUnsharpMask {
             val base = s0 * width
 
             for (i in 0 until count) {
-                luma[i] = Pixels.luma(src[base + i])
+                luma[i] = src.luma(base + i)
             }
 
             directionalLaplacians(luma, zx, zy, width, rows)
@@ -167,13 +166,9 @@ object AdaptiveDirectionalUnsharpMask {
 
                     // Eq. (5), written with A(n,m); Eq. (16) below then produces A(n,m+1).
                     val correction = gainX * zx[p] + gainY * zy[p]
-                    val pixel = src[i]
-                    out[i] = Pixels.pack(
-                        source = pixel,
-                        r = corrected(pixel, 16, correction),
-                        g = corrected(pixel, 8, correction),
-                        b = corrected(pixel, 0, correction),
-                    )
+                    out.red[i] = corrected(src.r(i), correction)
+                    out.green[i] = corrected(src.g(i), correction)
+                    out.blue[i] = corrected(src.b(i), correction)
 
                     rXX = retain * rXX + beta * hx * hx
                     rXY = retain * rXY + beta * hx * hy
@@ -232,14 +227,11 @@ object AdaptiveDirectionalUnsharpMask {
         }
     }
 
-    /** @return the channel selected by [shift] with the luma-domain [correction] added. */
-    private fun corrected(pixel: Int, shift: Int, correction: Double): Float =
-        (Pixels.channel(pixel, shift) + correction).toFloat()
+    /** @return [level] with the luma-domain [correction] added, stored at the internal scale. */
+    private fun corrected(level: Float, correction: Double): Short =
+        Frame.store((level + correction).toFloat())
 
     private fun validate(
-        src: IntArray,
-        width: Int,
-        height: Int,
         tau1: Double,
         tau2: Double,
         alphaB: Double,
@@ -249,10 +241,6 @@ object AdaptiveDirectionalUnsharpMask {
         beta: Double,
         maxGain: Double,
     ) {
-        require(width > 0 && height > 0) { "Image must be non-empty, got ${width}x$height" }
-        require(src.size == width * height) {
-            "Pixel array of ${src.size} does not match ${width}x$height"
-        }
         require(tau1 >= 0.0) { "tau1 must be >= 0, got $tau1" }
         require(tau1 < tau2) { "tau1 must be < tau2, got $tau1 and $tau2" }
         require(alphaB >= 1.0) { "alphaB must be >= 1, got $alphaB" }

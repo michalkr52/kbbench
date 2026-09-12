@@ -115,15 +115,11 @@ class AdaptiveUnsharpMasking(
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
-        require(input.frames.isNotEmpty()) { "AdaptiveUnsharpMask requires at least one frame" }
-
         val src = input.frames.first()
 
         val (out, processMs) = measureMs {
             AdaptiveDirectionalUnsharpMask.sharpen(
                 src = src,
-                width = input.width,
-                height = input.height,
                 tau1 = tau1 * VARIANCE_SCALE,
                 tau2 = tau2 * VARIANCE_SCALE,
                 alphaB = alphaB,
@@ -135,12 +131,7 @@ class AdaptiveUnsharpMasking(
             )
         }
 
-        return AlgorithmOutput(
-            pixels = out,
-            width = input.width,
-            height = input.height,
-            totalTime = processMs,
-        )
+        return AlgorithmOutput(frame = out, totalTime = processMs)
     }
 
     private companion object {

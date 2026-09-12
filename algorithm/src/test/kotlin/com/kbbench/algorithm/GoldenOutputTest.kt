@@ -38,7 +38,7 @@ class GoldenOutputTest {
             val file = File(goldenDir, "${algorithm.name}.png")
 
             if (regenerate) {
-                writePng(output.pixels, output.width, output.height, file)
+                writePng(output.frame.toArgb(), output.width, output.height, file)
                 continue
             }
             if (!file.exists()) {
@@ -48,7 +48,7 @@ class GoldenOutputTest {
             }
 
             val expected = readPixels(ImageIO.read(file) ?: fail("unreadable golden ${file.path}"))
-            describeDifference(algorithm.name, expected, output.pixels)?.let { problems += it }
+            describeDifference(algorithm.name, expected, output.frame.toArgb())?.let { problems += it }
         }
 
         if (regenerate) {
@@ -95,9 +95,7 @@ class GoldenOutputTest {
         val bright = goldenFrame(exposure = 1.0)
         val dark = goldenFrame(exposure = 0.25)
         return AlgorithmInput(
-            frames = listOf(bright, dark),
-            width = SIZE,
-            height = SIZE,
+            frames = listOf(frameOf(bright, SIZE, SIZE), frameOf(dark, SIZE, SIZE)),
             exposureTimes = listOf(10_000_000L, 2_500_000L),
             isoValues = listOf(100, 100),
             captureTimeMs = 0L,

@@ -80,25 +80,16 @@ class GuidedFilterColorDenoise(
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
-        require(input.frames.isNotEmpty()) { "GuidedFilterColor requires at least one frame" }
-
         val src = input.frames.first()
 
         val (out, processMs) = measureMs {
             GuidedFilter.filterColor(
                 src = src,
-                width = input.width,
-                height = input.height,
                 radius = radius,
                 eps = eps,
             )
         }
 
-        return AlgorithmOutput(
-            pixels = out,
-            width = input.width,
-            height = input.height,
-            totalTime = processMs,
-        )
+        return AlgorithmOutput(frame = out, totalTime = processMs)
     }
 }

@@ -60,14 +60,14 @@ class SharpeningRestorationTest {
 
                     for ((name, algorithm) in sharpeners) {
                         val output = algorithm.process(inputOf(degraded, frame.width, frame.height))
-                        val restored = calculateQualityMetrics(frame.pixels, output.pixels)
+                        val restored = calculateQualityMetrics(frame.pixels, output.frame.toArgb())
                         restoredPsnr[name] = (restoredPsnr[name] ?: 0.0) + restored.psnr / frames.size
                         restoredSsim[name] = (restoredSsim[name] ?: 0.0) + restored.ssim / frames.size
                         totalMs[name] = (totalMs[name] ?: 0L) + output.totalTime
 
                         if (blur == HEADLINE_BLUR && frame === frames.first()) {
                             writePng(
-                                output.pixels, frame.width, frame.height,
+                                output.frame.toArgb(), frame.width, frame.height,
                                 File("build/test-output/restored_${slug(name)}_sigma${sigma.toInt()}.png"),
                             )
                         }
@@ -134,9 +134,7 @@ class SharpeningRestorationTest {
     }
 
     private fun inputOf(pixels: IntArray, width: Int, height: Int) = AlgorithmInput(
-        frames = listOf(pixels),
-        width = width,
-        height = height,
+        frames = listOf(frameOf(pixels, width, height)),
         exposureTimes = listOf(10_000_000L),
         isoValues = listOf(100),
         captureTimeMs = 0L,

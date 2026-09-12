@@ -1,6 +1,6 @@
 package com.kbbench.algorithm.filter
 
-import com.kbbench.algorithm.base.Pixels
+import com.kbbench.algorithm.base.Frame
 import kotlin.math.max
 import kotlin.math.min
 
@@ -26,8 +26,6 @@ object GuidedFilter {
     private const val PLANES_GRAY = 4
     private const val PLANES_COLOR = 11
 
-    private val CHANNEL_SHIFTS = intArrayOf(16, 8, 0)
-
     /**
      * Channel pairs of the symmetric covariance, whose six entries are stored in the order
      * `[rr, rg, rb, gg, gb, bb]`.
@@ -44,25 +42,23 @@ object GuidedFilter {
      * reduce to `a = var / (var + eps)` and `b = mean_I * (1 - a)`. That is an exact rewrite, which
      * is why the code does not mirror the paper's general form.
      *
-     * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
      * @param radius Window half-width in pixels, at least 1.
      * @param eps Regularization in normalized `[0, 1]` intensity units, strictly positive.
      * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
-     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
-     * @throws IllegalArgumentException if the dimensions disagree with [src], or a parameter is out
-     *   of range.
+     * @return a new frame of the same geometry and reported depth.
+     * @throws IllegalArgumentException if a parameter is out of range.
      */
     fun filterGray(
-        src: IntArray,
-        width: Int,
-        height: Int,
+        src: Frame,
         radius: Int,
         eps: Double,
         bandHeight: Int = 0,
-    ): IntArray {
-        validate(src, width, height, radius, eps)
+    ): Frame {
+        validate(radius, eps)
 
-        val out = IntArray(src.size)
+        val width = src.width
+        val height = src.height
+        val out = src.emptyLike()
         val band = resolveBandHeight(bandHeight, width, height, radius, PLANES_GRAY)
         val capacity = width * bandCapacityRows(band, height, radius)
 
@@ -76,9 +72,11 @@ object GuidedFilter {
             val count = width * rows
             val base = s0 * width
 
-            for (shift in CHANNEL_SHIFTS) {
+            for (channel in 0 until 3) {
+                val srcPlane = src.plane(channel)
+                val outPlane = out.plane(channel)
                 for (i in 0 until count) {
-                    guidance[i] = Pixels.channel(src[base + i], shift)
+                    guidance[i] = Frame.level(srcPlane, base + i)
                 }
 
                 for (i in 0 until count) {
@@ -106,17 +104,8 @@ object GuidedFilter {
                     for (x in 0 until width) {
                         val i = srcRow + x
                         val p = planeRow + x
-                        val q = bufB[p] * Pixels.channel(src[i], shift) + bufA[p]
-                        out[i] = out[i] or (Pixels.quantize(q) shl shift)
+                        outPlane[i] = Frame.store(bufB[p] * Frame.level(srcPlane, i) + bufA[p])
                     }
-                }
-            }
-
-            for (y in y0 until y1) {
-                val row = y * width
-                for (x in 0 until width) {
-                    val i = row + x
-                    out[i] = out[i] or (src[i] and Pixels.ALPHA_MASK)
                 }
             }
         }
@@ -132,25 +121,23 @@ object GuidedFilter {
      * `b = eps * M * mean_I`. Both are symmetric, so six and three planes hold them, and both
      * overwrite the buffers they are derived from.
      *
-     * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
      * @param radius Window half-width in pixels, at least 1.
      * @param eps Regularization in normalized `[0, 1]` intensity units, strictly positive.
      * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
-     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
-     * @throws IllegalArgumentException if the dimensions disagree with [src], or a parameter is out
-     *   of range.
+     * @return a new frame of the same geometry and reported depth.
+     * @throws IllegalArgumentException if a parameter is out of range.
      */
     fun filterColor(
-        src: IntArray,
-        width: Int,
-        height: Int,
+        src: Frame,
         radius: Int,
         eps: Double,
         bandHeight: Int = 0,
-    ): IntArray {
-        validate(src, width, height, radius, eps)
+    ): Frame {
+        validate(radius, eps)
 
-        val out = IntArray(src.size)
+        val width = src.width
+        val height = src.height
+        val out = src.emptyLike()
         val band = resolveBandHeight(bandHeight, width, height, radius, PLANES_COLOR)
         val capacity = width * bandCapacityRows(band, height, radius)
 
@@ -166,19 +153,18 @@ object GuidedFilter {
             val base = s0 * width
 
             for (c in 0 until 3) {
-                val shift = CHANNEL_SHIFTS[c]
+                val srcPlane = src.plane(c)
                 for (i in 0 until count) {
-                    plane[i] = Pixels.channel(src[base + i], shift)
+                    plane[i] = Frame.level(srcPlane, base + i)
                 }
                 BoxFilter.mean(plane, meanI[c], scratch, width, rows, radius)
             }
 
             for (k in COVARIANCE_PAIRS.indices) {
-                val shiftJ = CHANNEL_SHIFTS[COVARIANCE_PAIRS[k][0]]
-                val shiftL = CHANNEL_SHIFTS[COVARIANCE_PAIRS[k][1]]
+                val planeJ = src.plane(COVARIANCE_PAIRS[k][0])
+                val planeL = src.plane(COVARIANCE_PAIRS[k][1])
                 for (i in 0 until count) {
-                    val pixel = src[base + i]
-                    plane[i] = Pixels.channel(pixel, shiftJ) * Pixels.channel(pixel, shiftL)
+                    plane[i] = Frame.level(planeJ, base + i) * Frame.level(planeL, base + i)
                 }
                 BoxFilter.mean(plane, covariance[k], scratch, width, rows, radius)
 
@@ -209,16 +195,13 @@ object GuidedFilter {
                 for (x in 0 until width) {
                     val i = srcRow + x
                     val p = planeRow + x
-                    val pixel = src[i]
-                    val r = Pixels.red(pixel)
-                    val g = Pixels.green(pixel)
-                    val b = Pixels.blue(pixel)
+                    val r = src.r(i)
+                    val g = src.g(i)
+                    val b = src.b(i)
 
-                    val qr = aRR[p] * r + aRG[p] * g + aRB[p] * b + bR[p]
-                    val qg = aRG[p] * r + aGG[p] * g + aGB[p] * b + bG[p]
-                    val qb = aRB[p] * r + aGB[p] * g + aBB[p] * b + bB[p]
-
-                    out[i] = Pixels.pack(pixel, qr, qg, qb)
+                    out.red[i] = Frame.store(aRR[p] * r + aRG[p] * g + aRB[p] * b + bR[p])
+                    out.green[i] = Frame.store(aRG[p] * r + aGG[p] * g + aGB[p] * b + bG[p])
+                    out.blue[i] = Frame.store(aRB[p] * r + aGB[p] * g + aBB[p] * b + bB[p])
                 }
             }
         }
@@ -282,11 +265,7 @@ object GuidedFilter {
     }
 
     /** @throws IllegalArgumentException if any argument is out of range for the filter. */
-    private fun validate(src: IntArray, width: Int, height: Int, radius: Int, eps: Double) {
-        require(width > 0 && height > 0) { "Image must be non-empty, got ${width}x$height" }
-        require(src.size == width * height) {
-            "Pixel array of ${src.size} does not match ${width}x$height"
-        }
+    private fun validate(radius: Int, eps: Double) {
         require(radius >= 1) { "radius must be >= 1, got $radius" }
         require(eps > 0.0) { "eps must be > 0, got $eps" }
     }

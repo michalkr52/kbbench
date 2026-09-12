@@ -27,9 +27,7 @@ class LinearUnsharpMaskImageIoTest {
         val pixels = readPixels(image)
 
         val input = AlgorithmInput(
-            frames = listOf(pixels),
-            width = width,
-            height = height,
+            frames = listOf(frameOf(pixels, width, height)),
             exposureTimes = listOf(10_000_000L),
             isoValues = listOf(100),
             captureTimeMs = 0L,
@@ -40,11 +38,11 @@ class LinearUnsharpMaskImageIoTest {
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
-        assertEquals(width * height, output.pixels.size)
+        assertEquals(width * height, output.frame.size)
 
         val before = computeMetrics(pixels)
-        val after = computeMetrics(output.pixels)
-        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.pixels)
+        val after = computeMetrics(output.frame.toArgb())
+        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.frame.toArgb())
 
         assertTrue(!quality.psnr.isNaN(), "PSNR should be a valid number or +Infinity")
         assertTrue(quality.ssim in -1.0..1.0, "SSIM out of range, got ${quality.ssim}")
@@ -54,13 +52,13 @@ class LinearUnsharpMaskImageIoTest {
         )
 
         val outputFile = File("build/test-output/linear_um_output.png")
-        writePng(output.pixels, width, height, outputFile)
+        writePng(output.frame.toArgb(), width, height, outputFile)
 
         // Same frame through the adaptive variant, so both sets of numbers land in one report.
         val adaptive = AdaptiveUnsharpMasking().process(input)
-        val adaptiveAfter = computeMetrics(adaptive.pixels)
+        val adaptiveAfter = computeMetrics(adaptive.frame.toArgb())
         val adaptiveQuality =
-            calculateQualityMetrics(referencePixels = pixels, candidatePixels = adaptive.pixels)
+            calculateQualityMetrics(referencePixels = pixels, candidatePixels = adaptive.frame.toArgb())
 
         val metricsFile = File("build/test-output/linear_um_metrics.txt")
         metricsFile.parentFile.mkdirs()

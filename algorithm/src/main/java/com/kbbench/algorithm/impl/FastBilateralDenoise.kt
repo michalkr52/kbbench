@@ -81,25 +81,16 @@ class FastBilateralDenoise(
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
-        require(input.frames.isNotEmpty()) { "FastBilateral requires at least one frame" }
-
         val src = input.frames.first()
 
         val (out, processMs) = measureMs {
             BilateralGrid.filter(
                 src = src,
-                width = input.width,
-                height = input.height,
                 sigmaSpatial = sigmaSpatial,
                 sigmaRange = sigmaRange,
             )
         }
 
-        return AlgorithmOutput(
-            pixels = out,
-            width = input.width,
-            height = input.height,
-            totalTime = processMs,
-        )
+        return AlgorithmOutput(frame = out, totalTime = processMs)
     }
 }

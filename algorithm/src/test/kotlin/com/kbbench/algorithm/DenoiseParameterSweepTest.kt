@@ -51,15 +51,13 @@ class DenoiseParameterSweepTest {
                 curve[threshold] = pairs.map { pair ->
                     val output = algorithm.process(
                         AlgorithmInput(
-                            frames = listOf(pair.noisy.pixels),
-                            width = pair.noisy.width,
-                            height = pair.noisy.height,
+                            frames = listOf(frameOf(pair.noisy.pixels, pair.noisy.width, pair.noisy.height)),
                             exposureTimes = listOf(10_000_000L),
                             isoValues = listOf(100),
                             captureTimeMs = 0L,
                         )
                     )
-                    calculateQualityMetrics(pair.clean.pixels, output.pixels).psnr
+                    calculateQualityMetrics(pair.clean.pixels, output.frame.toArgb()).psnr
                 }.average()
             }
             curves[name] = curve

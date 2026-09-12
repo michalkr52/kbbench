@@ -1,5 +1,7 @@
 package com.kbbench.algorithm
 
+import com.kbbench.algorithm.base.AlgorithmInput
+import com.kbbench.algorithm.base.Frame
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
@@ -12,6 +14,24 @@ import kotlin.test.assertTrue
  * Anything specific to one algorithm's claims stays in that algorithm's test class; what lives here
  * is used by at least two.
  */
+
+/**
+ * Wraps an ARGB fixture as a [Frame] at the depth it actually came from.
+ *
+ * Fixtures stay ARGB because the promotion to the internal scale is lossless for 8-bit input, so a
+ * pixel assertion written against the packed form keeps its exact meaning after the round trip.
+ */
+internal fun frameOf(pixels: IntArray, width: Int, height: Int): Frame =
+    Frame.fromArgb(pixels, width, height, sourceDepth = 8)
+
+/** Builds a single- or multi-frame input from ARGB fixtures, with placeholder capture metadata. */
+internal fun inputOf(width: Int, height: Int, vararg pixels: IntArray): AlgorithmInput =
+    AlgorithmInput(
+        frames = pixels.map { frameOf(it, width, height) },
+        exposureTimes = List(pixels.size) { 10_000_000L },
+        isoValues = List(pixels.size) { 100 },
+        captureTimeMs = 0L,
+    )
 
 internal fun argb(a: Int, r: Int, g: Int, b: Int): Int =
     (a shl 24) or (r shl 16) or (g shl 8) or b

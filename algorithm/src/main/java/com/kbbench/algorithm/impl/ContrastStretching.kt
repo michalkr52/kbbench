@@ -8,7 +8,7 @@ import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
-import com.kbbench.algorithm.base.Pixels
+import com.kbbench.algorithm.base.Frame
 import com.kbbench.algorithm.base.measureMs
 
 /**
@@ -32,50 +32,30 @@ class ContrastStretching : ImageAlgorithm {
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
-        require(input.frames.isNotEmpty()) { "ContrastStretching requires at least one frame" }
-
         val src = input.frames.first()
-        val out = IntArray(src.size)
+        val out = src.emptyLike()
 
         val (_, processMs) = measureMs {
-            var rMin = 1f; var rMax = 0f
-            var gMin = 1f; var gMax = 0f
-            var bMin = 1f; var bMax = 0f
+            for (channel in 0 until 3) {
+                val srcPlane = src.plane(channel)
+                val outPlane = out.plane(channel)
 
-            for (i in src.indices) {
-                val p = src[i]
-                val r = Pixels.red(p)
-                val g = Pixels.green(p)
-                val b = Pixels.blue(p)
-                if (r < rMin) rMin = r; if (r > rMax) rMax = r
-                if (g < gMin) gMin = g; if (g > gMax) gMax = g
-                if (b < bMin) bMin = b; if (b > bMax) bMax = b
-            }
+                var min = 1f
+                var max = 0f
+                for (i in 0 until src.size) {
+                    val v = Frame.level(srcPlane, i)
+                    if (v < min) min = v
+                    if (v > max) max = v
+                }
 
-            val rRange = rMax - rMin
-            val gRange = gMax - gMin
-            val bRange = bMax - bMin
-
-            for (i in src.indices) {
-                val p = src[i]
-                val r = Pixels.red(p)
-                val g = Pixels.green(p)
-                val b = Pixels.blue(p)
-
-                out[i] = Pixels.pack(
-                    source = p,
-                    r = if (rRange == 0f) r else (r - rMin) / rRange,
-                    g = if (gRange == 0f) g else (g - gMin) / gRange,
-                    b = if (bRange == 0f) b else (b - bMin) / bRange,
-                )
+                val range = max - min
+                for (i in 0 until src.size) {
+                    val v = Frame.level(srcPlane, i)
+                    outPlane[i] = if (range == 0f) srcPlane[i] else Frame.store((v - min) / range)
+                }
             }
         }
 
-        return AlgorithmOutput(
-            pixels = out,
-            width = input.width,
-            height = input.height,
-            totalTime = processMs,
-        )
+        return AlgorithmOutput(frame = out, totalTime = processMs)
     }
 }

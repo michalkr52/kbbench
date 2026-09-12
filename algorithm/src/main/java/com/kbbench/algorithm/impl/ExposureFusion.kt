@@ -8,7 +8,7 @@ import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
-import com.kbbench.algorithm.base.Pixels
+import com.kbbench.algorithm.base.Frame
 import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.preprocessing.TransferEncoding
 import kotlin.math.exp
@@ -44,48 +44,39 @@ class ExposureFusion : ImageAlgorithm {
         }
 
         val frames = input.frames
-        val n = frames[0].size
-        val out = IntArray(n)
+        val out = frames[0].emptyLike()
 
         val (_, processMs) = measureMs {
             val twoSigmaSq = 2.0 * WELL_EXPOSED_SIGMA * WELL_EXPOSED_SIGMA
 
-            for (i in 0 until n) {
+            for (i in 0 until out.size) {
                 var sumW = 0.0
                 var sumR = 0.0
                 var sumG = 0.0
                 var sumB = 0.0
 
-                for (f in frames.indices) {
-                    val p = frames[f][i]
-                    val d = Pixels.luma(p) - WELL_EXPOSED_MEAN
+                for (frame in frames) {
+                    val d = frame.luma(i) - WELL_EXPOSED_MEAN
                     val w = exp(-(d * d) / twoSigmaSq)
                     sumW += w
-                    sumR += w * Pixels.red(p)
-                    sumG += w * Pixels.green(p)
-                    sumB += w * Pixels.blue(p)
+                    sumR += w * frame.r(i)
+                    sumG += w * frame.g(i)
+                    sumB += w * frame.b(i)
                 }
 
-                val reference = frames[0][i]
-                out[i] = if (sumW > 0.0) {
-                    Pixels.pack(
-                        source = reference,
-                        r = (sumR / sumW).toFloat(),
-                        g = (sumG / sumW).toFloat(),
-                        b = (sumB / sumW).toFloat(),
-                    )
+                if (sumW > 0.0) {
+                    out.red[i] = Frame.store((sumR / sumW).toFloat())
+                    out.green[i] = Frame.store((sumG / sumW).toFloat())
+                    out.blue[i] = Frame.store((sumB / sumW).toFloat())
                 } else {
-                    reference
+                    out.red[i] = frames[0].red[i]
+                    out.green[i] = frames[0].green[i]
+                    out.blue[i] = frames[0].blue[i]
                 }
             }
         }
 
-        return AlgorithmOutput(
-            pixels = out,
-            width = input.width,
-            height = input.height,
-            totalTime = processMs,
-        )
+        return AlgorithmOutput(frame = out, totalTime = processMs)
     }
 
     private companion object {
