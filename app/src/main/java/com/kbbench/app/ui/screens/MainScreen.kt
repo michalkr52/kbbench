@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kbbench.app.ui.components.AlgorithmSelectorDialog
+import com.kbbench.app.ui.components.PreprocessingSettingsDialog
+import com.kbbench.app.preprocessing.summary
 import com.kbbench.app.ui.components.CameraPreview
 import com.kbbench.app.ui.components.RuleOfThirdsOverlay
 import com.kbbench.app.ui.components.RuleOfThirdsToolbar
@@ -44,13 +47,33 @@ import kotlinx.coroutines.delay
 @Composable
 fun MainScreen(viewModel: CameraViewModel = viewModel()) {
     val currentScreen by viewModel.currentScreen.collectAsState()
+    val error by viewModel.processingError.collectAsState()
+    val fallback by viewModel.dngFallbackRequested.collectAsState()
 
     when (currentScreen) {
         AppScreen.CAMERA -> CameraScreen(viewModel)
         AppScreen.RESULTS -> ResultScreen(viewModel)
     }
+    if (fallback) {
+        AlertDialog(
+            onDismissRequest = { viewModel.answerDngFallback(false) },
+            title = { Text("Native DNG decoding unavailable") },
+            text = { Text("Use the device-rendered image? RAW white balance, lens shading and highlight controls will not apply.") },
+            confirmButton = { TextButton(onClick = { viewModel.answerDngFallback(true) }) { Text("Use rendered image") } },
+            dismissButton = { TextButton(onClick = { viewModel.answerDngFallback(false) }) { Text("Cancel") } },
+        )
+    }
+    error?.let { message ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissProcessingError,
+            title = { Text("Processing failed") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = viewModel::dismissProcessingError) { Text("Close") } },
+        )
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraScreen(viewModel: CameraViewModel) {
     val context = LocalContext.current
@@ -60,6 +83,8 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
     val algorithmParameters by viewModel.algorithmParameters.collectAsState()
     val showRuleOfThirds by viewModel.showRuleOfThirds.collectAsState()
+    val preprocessingConfig by viewModel.preprocessingConfig.collectAsState()
+    var showPreprocessing by remember { mutableStateOf(false) }
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
@@ -251,6 +276,21 @@ fun CameraScreen(viewModel: CameraViewModel) {
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(preprocessingConfig.summary(), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            TooltipBox(
+                                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
+                                tooltip = { PlainTooltip { Text("Preprocessing") } },
+                                state = rememberTooltipState(),
+                            ) {
+                                IconButton(onClick = { showPreprocessing = true }, enabled = !isProcessing) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Preprocessing")
+                                }
+                            }
+                        }
+                        Row(
                             modifier = Modifier.padding(bottom = 32.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -345,6 +385,14 @@ fun CameraScreen(viewModel: CameraViewModel) {
                 Text("Camera permission required")
             }
         }
+    }
+
+    if (showPreprocessing) {
+        PreprocessingSettingsDialog(
+            initial = preprocessingConfig,
+            onConfirm = { viewModel.setPreprocessingConfig(it); showPreprocessing = false },
+            onDismiss = { showPreprocessing = false },
+        )
     }
 
     if (showAlgorithmSelector) {

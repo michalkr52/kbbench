@@ -103,6 +103,7 @@ dependencies {
     kapt 'com.github.bumptech.glide:compiler:4.11.0'
 
     // Unit testing
+    testImplementation 'org.json:json:20240303'
     testImplementation 'androidx.test.ext:junit:1.2.1'
     testImplementation 'androidx.test:rules:1.6.1'
     testImplementation 'androidx.test:runner:1.6.1'

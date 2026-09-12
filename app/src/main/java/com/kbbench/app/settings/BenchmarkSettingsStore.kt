@@ -2,6 +2,8 @@ package com.kbbench.app.settings
 
 import android.content.Context
 import android.util.Log
+import com.kbbench.algorithm.preprocessing.PreprocessingConfig
+import com.kbbench.app.preprocessing.PreprocessingProfileJson
 import org.json.JSONObject
 
 /**
@@ -72,6 +74,20 @@ class BenchmarkSettingsStore(context: Context) {
         prefs.edit().putBoolean(KEY_SHOW_RULE_OF_THIRDS, show).apply()
     }
 
+    fun loadPreprocessingConfig(): PreprocessingConfig {
+        val saved = prefs.getString(KEY_PREPROCESSING_PROFILE, null) ?: return PreprocessingConfig()
+        return try {
+            PreprocessingProfileJson.decode(JSONObject(saved))
+        } catch (e: Exception) {
+            Log.w(TAG, "Cannot load preprocessing profile; using defaults", e)
+            PreprocessingConfig()
+        }
+    }
+
+    fun savePreprocessingConfig(config: PreprocessingConfig) {
+        prefs.edit().putString(KEY_PREPROCESSING_PROFILE, PreprocessingProfileJson.encode(config).toString()).apply()
+    }
+
     private companion object {
         const val TAG = "BenchmarkSettings"
         const val PREFS_NAME = "kbbench_settings"
@@ -79,5 +95,6 @@ class BenchmarkSettingsStore(context: Context) {
         const val KEY_ALGORITHM_PARAMETERS = "algorithm_parameters"
         const val KEY_CAPTURE_FORMAT = "capture_format"
         const val KEY_SHOW_RULE_OF_THIRDS = "show_rule_of_thirds"
+        const val KEY_PREPROCESSING_PROFILE = "preprocessing_profile"
     }
 }
