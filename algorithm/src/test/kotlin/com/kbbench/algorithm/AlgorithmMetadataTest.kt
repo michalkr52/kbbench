@@ -91,5 +91,59 @@ class AlgorithmMetadataTest {
             assertEquals(name, registry.getByName(name).name)
         }
     }
-}
 
+    @Test
+    fun declaredParameterIdsAreUniquePerAlgorithm() {
+        for (algorithm in AlgorithmRegistry().getAll()) {
+            val ids = algorithm.metadata.parameters.map { it.id }
+            assertEquals(ids.size, ids.distinct().size, "duplicate parameter id in ${algorithm.name}: $ids")
+        }
+    }
+
+    /**
+     * Guards the one failure mode of declaring ranges separately from the constructors they feed:
+     * cross-parameter constraints such as `alphaDh > alphaDl` are checked at construction, so a
+     * range that drifts out of bounds would otherwise only surface as a failed run on device.
+     */
+    @Test
+    fun everyDeclaredParameterExtremeConstructs() {
+        for (algorithm in AlgorithmRegistry().getAll()) {
+            val parameters = algorithm.metadata.parameters
+            if (parameters.isEmpty()) continue
+
+            val extremes = mapOf(
+                "min" to parameters.associate { it.id to it.min },
+                "max" to parameters.associate { it.id to it.max },
+                "default" to parameters.associate { it.id to it.default },
+            )
+            for ((label, values) in extremes) {
+                val configured = algorithm.withParameters(values)
+                assertEquals(
+                    algorithm.name,
+                    configured.name,
+                    "${algorithm.name} changed identity at $label parameters",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun withParametersIgnoresUnknownAndOutOfRangeValues() {
+        for (algorithm in AlgorithmRegistry().getAll()) {
+            val parameters = algorithm.metadata.parameters
+            if (parameters.isEmpty()) continue
+
+            val hostile = parameters.associate { it.id to Double.NaN } +
+                parameters.associate { "${it.id}_removed" to 1.0 }
+            assertEquals(algorithm.name, algorithm.withParameters(hostile).name)
+            assertEquals(
+                algorithm.name,
+                algorithm.withParameters(parameters.associate { it.id to -1e9 }).name,
+            )
+            assertEquals(
+                algorithm.name,
+                algorithm.withParameters(parameters.associate { it.id to 1e9 }).name,
+            )
+        }
+    }
+}

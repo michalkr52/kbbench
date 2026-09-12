@@ -4,10 +4,12 @@ import com.kbbench.algorithm.base.AlgorithmCategory
 import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
+import com.kbbench.algorithm.base.AlgorithmParameter
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
+import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.filter.AdaptiveDirectionalUnsharpMask
 
 /**
@@ -63,6 +65,48 @@ class AdaptiveUnsharpMasking(
             inputFrameType = InputFrameType.SINGLE,
         ),
         description = "Single-frame directional unsharp masking with Gauss-Newton adapted gains.",
+        parameters = listOf(
+            AlgorithmParameter(
+                id = "tau1",
+                label = "Smooth threshold",
+                default = 60.0,
+                min = 10.0,
+                max = 150.0,
+                step = 5.0,
+                description = "Local variance below which a pixel counts as flat and is left untouched; raise it for noisier captures.",
+            ),
+            AlgorithmParameter(
+                id = "alphaDh",
+                label = "Mid-contrast gain",
+                default = 4.0,
+                min = 3.25,
+                max = 10.0,
+                step = 0.25,
+                description = "Sharpening applied to medium-contrast detail; raising it strengthens the effect.",
+            ),
+            AlgorithmParameter(
+                id = "maxGain",
+                label = "Gain ceiling",
+                default = 4.0,
+                min = 1.0,
+                max = 12.0,
+                step = 0.5,
+                description = "Upper bound on either directional gain; raising it allows stronger sharpening.",
+            ),
+        ),
+    )
+
+    // Ranges of the exposed parameters keep the init-block constraints (tau1 < tau2,
+    // alphaDh > alphaDl) satisfied without touching the parameters left at paper defaults.
+    override fun withParameters(values: Map<String, Double>): ImageAlgorithm = AdaptiveUnsharpMasking(
+        tau1 = metadata.parameters.resolve(values, "tau1"),
+        tau2 = tau2,
+        alphaB = alphaB,
+        alphaDl = alphaDl,
+        alphaDh = metadata.parameters.resolve(values, "alphaDh"),
+        mu = mu,
+        beta = beta,
+        maxGain = metadata.parameters.resolve(values, "maxGain"),
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {

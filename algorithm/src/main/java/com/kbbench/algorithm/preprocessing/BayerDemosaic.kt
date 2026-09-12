@@ -1,32 +1,24 @@
 package com.kbbench.algorithm.preprocessing
 
 /**
- * Bayer CFA (Color Filter Array) patterns.
- * Values match Android's CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT constants.
- */
-enum class CfaPattern(val id: Int) {
-    RGGB(0),
-    GRBG(1),
-    GBRG(2),
-    BGGR(3);
-
-    companion object {
-        fun fromId(id: Int): CfaPattern = entries.firstOrNull { it.id == id } ?: RGGB
-    }
-}
-
-/**
  * Bilinear Bayer demosaicing: converts a normalized RAW Bayer mosaic into an ARGB_8888 pixel array.
  */
 object BayerDemosaic {
 
+    /** Raw-normalized value (see [com.kbbench.algorithm.preprocessing.Raw16Decoder]) at or above which a channel is considered sensor-clipped. */
+    private const val RAW_CLIP_THRESHOLD = 0.999f
+
     /**
      * Demosaics a RAW image represented as normalized floats (0..1) into ARGB_8888 pixels.
      *
-     * White balance gains are applied in the float domain before the single 8-bit
-     * quantization below, so the result stays injective per input level. Applying gains
-     * to already-quantized 8-bit values instead would truncate twice and produce comb-like
+    * Stage order is white balance -> [colorMatrix] -> exposure -> transfer -> 8-bit quantization,
+    * with float intermediates until the output is encoded. Applying any of these to
+     * already-quantized 8-bit values instead would truncate repeatedly and produce comb-like
      * gaps/spikes per channel in the output histogram.
+     *
+     * @param colorMatrix row-major 3x3 transform from white-balanced camera RGB to linear sRGB.
+     *   Rows are renormalized to sum to 1 so a neutral input stays neutral. Without it the camera's
+     *   broad, overlapping CFA primaries render visibly desaturated.
      */
     fun demosaic(
         raw: FloatArray,
@@ -35,7 +27,9 @@ object BayerDemosaic {
         pattern: CfaPattern,
         rGain: Float = 1f,
         gGain: Float = 1f,
-        bGain: Float = 1f
+        bGain: Float = 1f,
+        colorMatrix: FloatArray? = null,
+        config: PreprocessingConfig = PreprocessingConfig(),
     ): IntArray {
         val rX: Int; val rY: Int
         val bX: Int; val bY: Int
@@ -45,8 +39,12 @@ object BayerDemosaic {
             CfaPattern.GBRG -> { rX = 0; rY = 1; bX = 1; bY = 0 }
             CfaPattern.BGGR -> { rX = 1; rY = 1; bX = 0; bY = 0 }
         }
-        val normR = rGain / gGain
-        val normB = bGain / gGain
+        val gains = config.resolveWhiteBalance(WhiteBalanceGains(rGain, gGain, bGain))
+        val normR = gains.red
+        val normB = gains.blue
+        val m = colorMatrix?.let { ColorTransform.normalizeRows(it) }
+        val exposure = config.exposureMultiplier
+        val curve = config.transferCurve
 
         val pixels = IntArray(width * height)
         for (y in 0 until height) {
@@ -78,39 +76,31 @@ object BayerDemosaic {
                     }
                 }
 
-                val ri = ((r * normR).coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
-                val gi = (g.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
-                val bi = ((b * normB).coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+                var lr = r * normR
+                var lg = g
+                var lb = b * normB
+                if (config.highlights == HighlightMode.NEUTRALIZE_CLIPPED &&
+                    maxOf(r, g, b) >= RAW_CLIP_THRESHOLD) {
+                    // A raw-clipped channel means its true brightness is unknown, so scaling it
+                    // by normR/normB (typically > 1) while G stays unscaled tints blown highlights
+                    // magenta instead of white. Render clipped highlights neutral instead.
+                    val neutral = maxOf(lr, lg, lb)
+                    lr = neutral; lg = neutral; lb = neutral
+                }
+                if (m != null) {
+                    val tr = m[0] * lr + m[1] * lg + m[2] * lb
+                    val tg = m[3] * lr + m[4] * lg + m[5] * lb
+                    val tb = m[6] * lr + m[7] * lg + m[8] * lb
+                    lr = tr; lg = tg; lb = tb
+                }
+
+                val ri = curve.encode8(lr * exposure)
+                val gi = curve.encode8(lg * exposure)
+                val bi = curve.encode8(lb * exposure)
                 pixels[y * width + x] = (0xFF shl 24) or (ri shl 16) or (gi shl 8) or bi
             }
         }
         return pixels
-    }
-
-    /**
-     * Normalizes a 16-bit RAW buffer into floats using white and black levels.
-     */
-    fun normalizeRaw16(
-        rawBuffer: java.nio.ByteBuffer,
-        width: Int,
-        height: Int,
-        rowStride: Int,
-        pixelStride: Int,
-        whiteLevel: Int,
-        blackLevel: Int
-    ): FloatArray {
-        val range = (whiteLevel - blackLevel).coerceAtLeast(1)
-        val raw = FloatArray(width * height)
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                val offset = y * rowStride + x * pixelStride
-                val lo = rawBuffer.get(offset).toInt() and 0xFF
-                val hi = rawBuffer.get(offset + 1).toInt() and 0xFF
-                val val16 = (hi shl 8) or lo
-                raw[y * width + x] = ((val16 - blackLevel).toFloat() / range).coerceIn(0f, 1f)
-            }
-        }
-        return raw
     }
 
     private fun avgNeighbors4(raw: FloatArray, x: Int, y: Int, w: Int, h: Int): Float {
