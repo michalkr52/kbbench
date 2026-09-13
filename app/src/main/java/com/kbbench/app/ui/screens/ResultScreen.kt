@@ -35,6 +35,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -269,6 +270,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         results = results,
                         isSelectingForCompare = isSelectingForCompare,
                         compareSelection = compareSelection,
+                        isProcessing = isProcessing,
                         onItemClick = { index ->
                             if (isSelectingForCompare) {
                                 compareSelection = if (index in compareSelection) {
@@ -384,7 +386,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
 
 /** Capture-derived artifacts (original + preprocessed frames + reference) shown ahead of algorithm outputs. */
 private fun BenchmarkResult.isInputTile(): Boolean =
-    id == "original" || id == "reference" || id.startsWith("preprocessed_")
+    id == "reference" || id.startsWith("preprocessed_")
 
 private enum class MetricsSortColumn {
     ALGORITHM,
@@ -622,6 +624,7 @@ fun ResultGridView(
     results: List<BenchmarkResult>,
     isSelectingForCompare: Boolean,
     compareSelection: Set<Int>,
+    isProcessing: Boolean,
     onItemClick: (Int) -> Unit,
     onSelectForCompare: () -> Unit,
     onCancelCompare: () -> Unit,
@@ -671,24 +674,32 @@ fun ResultGridView(
         // Bottom action bar
         Surface(
             tonalElevation = 3.dp,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .alpha(if (isProcessing) 0.45f else 1f)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
             ) {
                 if (isSelectingForCompare) {
-                    OutlinedButton(onClick = onCancelCompare) {
+                    OutlinedButton(
+                        onClick = onCancelCompare,
+                        enabled = !isProcessing
+                    ) {
                         Text("Cancel")
                     }
                     Button(
                         onClick = onCompare,
-                        enabled = compareSelection.size == 2
+                        enabled = !isProcessing && compareSelection.size == 2
                     ) {
                         Text("Compare")
                     }
                 } else {
-                    OutlinedButton(onClick = onSelectForCompare) {
+                    OutlinedButton(
+                        onClick = onSelectForCompare,
+                        enabled = !isProcessing
+                    ) {
                         Text("Select for comparison")
                     }
                 }
@@ -849,14 +860,21 @@ fun ResultFullscreenView(
         // Metrics overlay
         val currentResult = results[pagerState.currentPage]
         val displayMetrics = currentResult.metrics.toDisplayList()
+        val inputFrameDescription = currentResult.inputFrameDescription()
+        val hasDetails = displayMetrics.isNotEmpty() ||
+            currentResult.subtitle != null ||
+            inputFrameDescription != null
 
-        if (displayMetrics.isNotEmpty()) {
+        if (hasDetails) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Metrics", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (displayMetrics.isNotEmpty()) "Metrics" else "Preprocessing",
+                        style = MaterialTheme.typography.titleMedium
+                    )
                     currentResult.subtitle?.let { subtitle ->
                         Text(
                             text = subtitle,
@@ -864,7 +882,7 @@ fun ResultFullscreenView(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
-                    currentResult.inputFrameDescription()?.let { description ->
+                    inputFrameDescription?.let { description ->
                         Text(
                             text = description,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
@@ -887,14 +905,14 @@ fun ResultFullscreenView(
 }
 
 private fun BenchmarkResult.inputFrameDescription(): String? {
-    if (inputFrameIndices.isEmpty()) return null
+    if (inputFrameIndices.isEmpty() || capturedFrameCount == 1) return null
     val frames = inputFrameIndices.joinToString(", ") { (it + 1).toString() }
     return "Input frames: $frames"
 }
 
 /** Fullscreen title must disambiguate preprocessed frames, since the grid's "Frame X of Y" caption isn't shown there. */
 private fun BenchmarkResult.fullscreenTitle(): String {
-    if (preprocessedFrameIndex != null && preprocessedFrameCount != null) {
+    if (preprocessedFrameIndex != null && preprocessedFrameCount != null && preprocessedFrameCount > 1) {
         return "$title (Frame ${preprocessedFrameIndex + 1} of $preprocessedFrameCount)"
     }
     return title
@@ -951,7 +969,10 @@ private fun ResultLabel(
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
-        if (result.preprocessedFrameIndex != null && result.preprocessedFrameCount != null) {
+        if (result.preprocessedFrameIndex != null &&
+            result.preprocessedFrameCount != null &&
+            result.preprocessedFrameCount > 1
+        ) {
             Text(
                 text = result.title,
                 style = MaterialTheme.typography.labelSmall

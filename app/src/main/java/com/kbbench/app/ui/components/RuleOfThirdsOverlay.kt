@@ -46,8 +46,8 @@ fun RuleOfThirdsOverlay(
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier.fillMaxSize()) {
-        val lineColor = Color.White.copy(alpha = 0.5f)
-        val strokeWidth = 2.dp.toPx()
+        val lineColor = Color.White.copy(alpha = 0.4f)
+        val strokeWidth = 1.dp.toPx()
         val verticalThird = size.width / 3f
         val horizontalThird = size.height / 3f
         val gridPath = Path().apply {

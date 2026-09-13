@@ -122,6 +122,7 @@ data class BenchmarkResult(
     val displayRotationDegrees: Int = 0,
     val preprocessedFrameIndex: Int? = null,
     val preprocessedFrameCount: Int? = null,
+    val capturedFrameCount: Int? = null,
     val inputFrameIndices: List<Int> = emptyList(),
     val metrics: BenchmarkMetrics = BenchmarkMetrics(),
     val canonicalImagePath: String = imagePath,
@@ -1346,8 +1347,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             preprocessedFile
         }
 
-        val isRawSource = captureMetadata.sourceFormat == "RAW_SENSOR"
-
         persistedSources.forEachIndexed { index, sourceFile ->
             artifacts.add(
                 ExportImageArtifact(
@@ -1360,16 +1359,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             )
         }
-        // Original capture leads the Input group chronologically; preprocessed frame(s) follow it.
-        results.add(
-            BenchmarkResult(
-                id = "original",
-                title = if (isRawSource) "RAW Source (DNG)" else "Camera JPEG",
-                subtitle = if (isRawSource) "Device-rendered preview" else null,
-                imagePath = persistedSources.first().absolutePath,
-                displayRotationDegrees = originalDisplayRotation,
-            )
-        )
         if (preprocessedFiles.isNotEmpty()) {
             preprocessedFiles.forEachIndexed { index, preprocessedFile ->
                 results.add(
@@ -1484,6 +1473,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     subtitle = describeOverrides(algo, overrides),
                     imagePath = displayFile.absolutePath,
                     canonicalImagePath = outFile.absolutePath,
+                    capturedFrameCount = frames.size,
                     inputFrameIndices = inputFrameIndices,
                     metrics = BenchmarkMetrics(runtimeMs = output.totalTime)
                 ))
@@ -1496,6 +1486,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     title = "${algo.name} (failed)",
                     imagePath = originalFile.absolutePath,
                     displayRotationDegrees = originalDisplayRotation,
+                    capturedFrameCount = frames.size,
                     inputFrameIndices = inputFrameIndices,
                     metrics = BenchmarkMetrics()
                 ))
@@ -2182,10 +2173,22 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             .put("rendering_version", ArgbTransfer.VERSION))
 
         val resultEntries = JSONArray()
+        artifacts.firstOrNull { it.role == "original_capture" }?.let { original ->
+            resultEntries.put(
+                JSONObject()
+                    .put("id", "original")
+                    .put("kind", "original_capture")
+                    .put("title", if (captureMetadata.sourceFormat == "RAW_SENSOR") {
+                        "RAW Source (DNG)"
+                    } else {
+                        "Camera JPEG"
+                    })
+                    .put("image_id", original.id)
+            )
+        }
         results.forEach { result ->
             val image = imageByPath[result.canonicalImagePath] ?: return@forEach
             val kind = when {
-                result.id == "original" -> "original_capture"
                 result.id.startsWith("preprocessed_") -> "preprocessed_input"
                 result.id == "reference" -> "reference_image"
                 else -> "algorithm"
