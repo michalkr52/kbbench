@@ -1393,10 +1393,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Both decode paths hand over ARGB_8888 today: JPEG through BitmapFactory, and RAW because
-        // ColorTransform.encodeSrgb8 still quantizes at the end of the demosaic. Promoting here is
-        // lossless, and this single conversion point is where the real sensor depth will be threaded
-        // through once the RAW pipeline emits it.
         val sourceFrames = frames.map { Frame.fromArgb(it, width, height, sourceDepth = 8) }
 
         for (algo in algorithms) {
