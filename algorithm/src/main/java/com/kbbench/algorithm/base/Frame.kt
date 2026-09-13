@@ -110,6 +110,43 @@ class Frame(
             return Frame(red, green, blue, width, height, sourceDepth)
         }
 
+        /**
+         * Builds a frame from separate channel planes of any depth up to [INTERNAL_DEPTH],
+         * promoting each sample onto the internal scale.
+         *
+         * This is the entry point for a sensor that is not 8-bit; [fromArgb] is the special case
+         * the Android side happens to need.
+         *
+         * @param red Row-major samples in `0 until (1 shl sourceDepth)`; out-of-range values are
+         *   clamped rather than wrapped.
+         * @throws IllegalArgumentException if the planes disagree with the geometry, or
+         *   [sourceDepth] is outside `1..`[INTERNAL_DEPTH].
+         */
+        fun fromChannels(
+            red: IntArray,
+            green: IntArray,
+            blue: IntArray,
+            width: Int,
+            height: Int,
+            sourceDepth: Int,
+        ): Frame {
+            require(sourceDepth in 1..INTERNAL_DEPTH) {
+                "sourceDepth must be in 1..$INTERNAL_DEPTH, got $sourceDepth"
+            }
+            val count = width * height
+            require(red.size == count && green.size == count && blue.size == count) {
+                "Planes must hold $count entries, got ${red.size}/${green.size}/${blue.size}"
+            }
+            val sourceMax = (1 shl sourceDepth) - 1
+            fun promote(plane: IntArray) = ShortArray(count) { i ->
+                // Exact at both ends: 0 stays 0 and sourceMax lands on MAX_VALUE, with rounding in
+                // between. Bit replication only gets that right when sourceDepth divides 16.
+                val v = plane[i].coerceIn(0, sourceMax)
+                ((v.toLong() * MAX_VALUE + sourceMax / 2) / sourceMax).toInt().toShort()
+            }
+            return Frame(promote(red), promote(green), promote(blue), width, height, sourceDepth)
+        }
+
         /** @return [value] in `[0, 1]` stored at the internal scale, rounded to nearest and clamped. */
         fun store(value: Float): Short =
             (value * MAX_VALUE + 0.5f).toInt().coerceIn(0, MAX_VALUE).toShort()
