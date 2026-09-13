@@ -31,6 +31,7 @@ data class PreprocessingRecord(
     val source: PreprocessingSource = PreprocessingSource.RENDERED_IMAGE,
     val rawSettings: List<ResolvedRawPreprocessing> = emptyList(),
     val colorMatrix: List<Float>? = null,
+    val captureSnapshot: RawCaptureSnapshot? = null,
 ) {
     val isRaw: Boolean get() = source == PreprocessingSource.CAMERA_RAW || source == PreprocessingSource.IMPORTED_DNG
 
@@ -61,6 +62,7 @@ data class PreprocessingRecord(
             .put("effective_raw_frames", frames)
             .put("color_matrix", colorMatrix?.let { JSONArray(it) } ?: JSONObject.NULL)
             .put("color_matrix_row_normalized", isRaw && colorMatrix != null)
+            .put("capture_snapshot", captureSnapshot?.toJson() ?: JSONObject.NULL)
             .put("rendered_stage_order", if (isRaw) JSONObject.NULL else JSONArray(if (
                 config.transferCurve.encoding == TransferEncoding.SRGB && config.exposureOffsetEv == 0.0
             ) {

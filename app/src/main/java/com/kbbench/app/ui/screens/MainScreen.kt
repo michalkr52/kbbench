@@ -36,7 +36,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kbbench.app.ui.components.AlgorithmSelectorDialog
 import com.kbbench.app.ui.components.PreprocessingSettingsDialog
-import com.kbbench.app.preprocessing.summary
 import com.kbbench.app.ui.components.CameraPreview
 import com.kbbench.app.ui.components.RuleOfThirdsOverlay
 import com.kbbench.app.ui.components.RuleOfThirdsToolbar
@@ -276,39 +275,9 @@ fun CameraScreen(viewModel: CameraViewModel) {
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(preprocessingConfig.summary(), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                            TooltipBox(
-                                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
-                                tooltip = { PlainTooltip { Text("Preprocessing") } },
-                                state = rememberTooltipState(),
-                            ) {
-                                IconButton(onClick = { showPreprocessing = true }, enabled = !isProcessing) {
-                                    Icon(Icons.Default.Settings, contentDescription = "Preprocessing")
-                                }
-                            }
-                        }
-                        Row(
                             modifier = Modifier.padding(bottom = 32.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(
-                                onClick = { showAlgorithmSelector = true },
-                                enabled = !isProcessing,
-                                modifier = Modifier
-                                    .padding(end = 24.dp)
-                                    .size(56.dp)
-                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Tune,
-                                    contentDescription = "Select algorithms",
-                                    tint = Color.White
-                                )
-                            }
-
                             IconButton(
                                 onClick = {
                                     uploadInputLauncher.launch(
@@ -373,6 +342,32 @@ fun CameraScreen(viewModel: CameraViewModel) {
                                 }
                             }
 
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { showPreprocessing = true },
+                                enabled = !isProcessing,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Default.Settings, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Preprocessing")
+                            }
+                            OutlinedButton(
+                                onClick = { showAlgorithmSelector = true },
+                                enabled = !isProcessing,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Icon(Icons.Filled.Tune, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Algorithm setup")
+                            }
                         }
                     }
                 }

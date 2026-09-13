@@ -4,8 +4,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,8 +32,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmParameter
+import com.kbbench.algorithm.preprocessing.TransferEncoding
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -65,9 +69,17 @@ fun AlgorithmSelectorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier
+            .fillMaxWidth(0.92f)
+            .fillMaxHeight(0.9f),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("Algorithms") },
         text = {
-            Column {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -79,7 +91,13 @@ fun AlgorithmSelectorDialog(
                     )
                 }
                 HorizontalDivider()
-                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 0.dp),
+                    contentPadding = PaddingValues(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     items(algorithms, key = { it.name }) { algorithm ->
                         AlgorithmRow(
                             algorithm = algorithm,
@@ -150,6 +168,11 @@ private fun AlgorithmRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Text(
+                    text = algorithm.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+                )
             }
             if (hasParameters) {
                 IconButton(onClick = onExpandToggle) {
@@ -166,6 +189,23 @@ private fun AlgorithmRow(
         }
 
         if (expanded && hasParameters) {
+            val guidance = algorithm.preprocessingGuidance
+            guidance.recommendedTransfer?.let { transfer ->
+                Text(
+                    text = "Recommended transfer: ${transfer.label()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+            guidance.requiredTransfer?.let { transfer ->
+                Text(
+                    text = "Required transfer: ${transfer.label()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
             algorithm.parameters.forEach { parameter ->
                 ParameterSlider(
                     parameter = parameter,
@@ -184,9 +224,15 @@ private fun AlgorithmRow(
                     }
                 }
             }
-            HorizontalDivider()
+            HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
         }
     }
+}
+
+private fun TransferEncoding.label(): String = when (this) {
+    TransferEncoding.SRGB -> "sRGB"
+    TransferEncoding.LINEAR -> "linear"
+    TransferEncoding.LOG -> "log"
 }
 
 @Composable
@@ -201,7 +247,7 @@ private fun ParameterSlider(
         (((parameter.max - parameter.min) / parameter.step).roundToInt() - 1).coerceAtLeast(0)
     }
 
-    Column(modifier = Modifier.padding(bottom = 4.dp)) {
+    Column(modifier = Modifier.padding(bottom = 4.dp, top = 4.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically

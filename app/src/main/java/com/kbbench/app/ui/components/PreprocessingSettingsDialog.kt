@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -31,7 +32,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.kbbench.algorithm.preprocessing.HighlightMode
 import com.kbbench.algorithm.preprocessing.LensShadingMode
 import com.kbbench.algorithm.preprocessing.PreprocessingConfig
@@ -67,8 +70,10 @@ fun PreprocessingSettingsDialog(
         },
         text = {
             Column(
-                modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 ProfileChoice("Transfer", config.transferCurve.encoding, listOf(
                     TransferEncoding.SRGB to "sRGB", TransferEncoding.LINEAR to "Linear", TransferEncoding.LOG to "Log",
@@ -81,7 +86,11 @@ fun PreprocessingSettingsDialog(
                 ProfileNumber("Exposure offset (EV)", config.exposureOffsetEv, -4f..4f, 31) {
                     config = config.copy(exposureOffsetEv = it)
                 }
-                Text("RAW only", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "RAW only",
+                    modifier = Modifier.padding(top = 12.dp),
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                )
                 ProfileChoice("White balance", config.whiteBalance, listOf(
                     WhiteBalanceMode.METADATA to "Metadata", WhiteBalanceMode.IDENTITY to "Identity", WhiteBalanceMode.MANUAL to "Manual",
                 )) { config = config.copy(whiteBalance = it) }
@@ -94,12 +103,21 @@ fun PreprocessingSettingsDialog(
                         config = config.copy(manualWhiteBalance = WhiteBalanceGains(gains.red, 1f, it.toFloat()))
                     }
                 }
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Lens shading (metadata)", modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = config.lensShading == LensShadingMode.METADATA,
-                        onCheckedChange = { config = config.copy(lensShading = if (it) LensShadingMode.METADATA else LensShadingMode.OFF) },
-                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Lens shading", modifier = Modifier.weight(1f))
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.Start,
+                    ) {
+                        Switch(
+                            checked = config.lensShading == LensShadingMode.METADATA,
+                            onCheckedChange = { config = config.copy(lensShading = if (it) LensShadingMode.METADATA else LensShadingMode.OFF) },
+                            modifier = Modifier.padding(start = 12.dp),
+                        )
+                    }
                 }
                 ProfileChoice("Highlights", config.highlights, listOf(
                     HighlightMode.NEUTRALIZE_CLIPPED to "Neutralize clipped", HighlightMode.CLIP_CHANNELS to "Clip channels",

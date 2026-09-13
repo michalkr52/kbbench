@@ -5,12 +5,14 @@ import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
 import com.kbbench.algorithm.base.AlgorithmParameter
+import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.filter.GuidedFilter
+import com.kbbench.algorithm.preprocessing.TransferEncoding
 import kotlin.math.roundToInt
 
 /**
@@ -48,7 +50,10 @@ class GuidedFilterColorDenoise(
             maxFrames = 1,
             inputFrameType = InputFrameType.SINGLE,
         ),
-        description = "Single-frame edge-preserving denoising, guided by the full RGB frame.",
+        description = "Edge-preserving denoising guided by all RGB channels",
+        preprocessingGuidance = AlgorithmPreprocessingGuidance(
+            recommendedTransfer = TransferEncoding.SRGB,
+        ),
         parameters = listOf(
             AlgorithmParameter(
                 id = "radius",
@@ -57,7 +62,7 @@ class GuidedFilterColorDenoise(
                 min = 1.0,
                 max = 32.0,
                 step = 1.0,
-                description = "Window half-width in pixels; raising it smooths across a wider area.",
+                description = "Window half-width in pixels.\nIncreasing it smooths a wider area.",
             ),
             AlgorithmParameter(
                 id = "eps",
@@ -66,7 +71,7 @@ class GuidedFilterColorDenoise(
                 min = 0.001,
                 max = 0.25,
                 step = 0.001,
-                description = "Smoothing strength; raising it blurs more, lowering it preserves more detail.",
+                description = "Smoothing strength.\nIncreasing it applies more smoothing.",
             ),
         ),
     )

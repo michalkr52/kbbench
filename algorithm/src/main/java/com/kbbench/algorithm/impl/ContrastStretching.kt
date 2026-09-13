@@ -4,6 +4,7 @@ import com.kbbench.algorithm.base.AlgorithmCategory
 import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
+import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
@@ -26,7 +27,7 @@ class ContrastStretching : ImageAlgorithm {
             maxFrames = 1,
             inputFrameType = InputFrameType.SINGLE,
         ),
-        description = "Single-frame per-channel linear contrast stretching.",
+        description = "Per-channel linear contrast stretching",
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {

@@ -5,12 +5,14 @@ import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
 import com.kbbench.algorithm.base.AlgorithmParameter
+import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
 import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.filter.AdaptiveDirectionalUnsharpMask
+import com.kbbench.algorithm.preprocessing.TransferEncoding
 
 /**
  * Single-frame adaptive unsharp masking (Polesel, Ramponi, Mathews, IEEE TIP 9(3), 2000).
@@ -64,7 +66,10 @@ class AdaptiveUnsharpMasking(
             maxFrames = 1,
             inputFrameType = InputFrameType.SINGLE,
         ),
-        description = "Single-frame directional unsharp masking with Gauss-Newton adapted gains.",
+        description = "Directional unsharp masking with adaptive gains",
+        preprocessingGuidance = AlgorithmPreprocessingGuidance(
+            recommendedTransfer = TransferEncoding.SRGB,
+        ),
         parameters = listOf(
             AlgorithmParameter(
                 id = "tau1",
@@ -73,7 +78,7 @@ class AdaptiveUnsharpMasking(
                 min = 10.0,
                 max = 150.0,
                 step = 5.0,
-                description = "Local variance below which a pixel counts as flat and is left untouched; raise it for noisier captures.",
+                description = "Flat-area variance threshold.\nIncreasing it leaves more areas untouched.",
             ),
             AlgorithmParameter(
                 id = "alphaDh",
@@ -82,7 +87,7 @@ class AdaptiveUnsharpMasking(
                 min = 3.25,
                 max = 10.0,
                 step = 0.25,
-                description = "Sharpening applied to medium-contrast detail; raising it strengthens the effect.",
+                description = "Medium-contrast sharpening gain.\nIncreasing it strengthens the effect.",
             ),
             AlgorithmParameter(
                 id = "maxGain",
@@ -91,7 +96,7 @@ class AdaptiveUnsharpMasking(
                 min = 1.0,
                 max = 12.0,
                 step = 0.5,
-                description = "Upper bound on either directional gain; raising it allows stronger sharpening.",
+                description = "Maximum directional gain.\nIncreasing it allows for stronger sharpening.",
             ),
         ),
     )

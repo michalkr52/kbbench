@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kbbench.app.viewmodel.BenchmarkResult
 import com.kbbench.app.viewmodel.CameraViewModel
+import com.kbbench.app.ui.components.PreprocessingSettingsDialog
 import com.kbbench.app.ui.components.AlgorithmSelectorDialog
 import com.kbbench.app.ui.components.HistogramOverlay
 import com.kbbench.app.ui.components.HistogramToolbar
@@ -72,10 +74,13 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var exportAsZip by remember { mutableStateOf(false) }
     var showMetricsTable by remember { mutableStateOf(false) }
     var showAlgorithmSelector by remember { mutableStateOf(false) }
+    var showPreprocessing by remember { mutableStateOf(false) }
     val histograms by viewModel.histograms.collectAsState()
     val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
     val algorithmParameters by viewModel.algorithmParameters.collectAsState()
+    val preprocessingConfig by viewModel.preprocessingConfig.collectAsState()
     val canRerun by viewModel.canRerun.collectAsState()
+    val canReprocessFromSource by viewModel.canReprocessFromSource.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
 
     val loadReferenceLauncher = rememberLauncherForActivityResult(
@@ -161,6 +166,17 @@ fun ResultScreen(viewModel: CameraViewModel) {
                                 Icon(
                                     imageVector = Icons.Default.Tune,
                                     contentDescription = "Adjust parameters and re-run"
+                                )
+                            }
+                        }
+                        if (canReprocessFromSource && !showMetricsTable) {
+                            IconButton(
+                                onClick = { showPreprocessing = true },
+                                enabled = !isProcessing,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Adjust preprocessing and reprocess",
                                 )
                             }
                         }
@@ -338,6 +354,19 @@ fun ResultScreen(viewModel: CameraViewModel) {
                 viewModel.rerunBenchmarks(context)
             },
             onDismiss = { showAlgorithmSelector = false }
+        )
+    }
+    if (showPreprocessing) {
+        PreprocessingSettingsDialog(
+            initial = preprocessingConfig,
+            onConfirm = { config ->
+                viewModel.setPreprocessingConfig(config)
+                showPreprocessing = false
+                selectedIndex = null
+                compareIndices = null
+                viewModel.reprocessFromSource(context)
+            },
+            onDismiss = { showPreprocessing = false },
         )
     }
 

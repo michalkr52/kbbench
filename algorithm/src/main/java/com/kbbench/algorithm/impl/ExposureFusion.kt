@@ -4,10 +4,12 @@ import com.kbbench.algorithm.base.AlgorithmCategory
 import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
+import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
+import com.kbbench.algorithm.preprocessing.TransferEncoding
 import kotlin.math.exp
 
 /**
@@ -29,7 +31,10 @@ class ExposureFusion : ImageAlgorithm {
             minFrames = 2,
             inputFrameType = InputFrameType.EXPOSURE_BRACKET,
         ),
-        description = "Multi-frame exposure fusion weighted by mid-tone luminance.",
+        description = "Exposure fusion weighted by mid-tone luminance",
+        preprocessingGuidance = AlgorithmPreprocessingGuidance(
+            recommendedTransfer = TransferEncoding.SRGB,
+        ),
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
