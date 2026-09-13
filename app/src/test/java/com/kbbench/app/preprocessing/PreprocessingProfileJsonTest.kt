@@ -32,11 +32,6 @@ class PreprocessingProfileJsonTest {
     }
 
     @Test(expected = IllegalArgumentException::class)
-    fun futureProfileVersionIsRejected() {
-        PreprocessingProfileJson.decode(PreprocessingProfileJson.encode(PreprocessingConfig()).put("version", 100))
-    }
-
-    @Test(expected = IllegalArgumentException::class)
     fun invalidExposureIsRejected() {
         PreprocessingProfileJson.decode(PreprocessingProfileJson.encode(PreprocessingConfig()).put("exposure_offset_ev", 100))
     }
@@ -46,8 +41,10 @@ class PreprocessingProfileJsonTest {
         val profile = PreprocessingConfig(transferCurve = TransferCurve(TransferEncoding.LINEAR))
         val rendered = PreprocessingRecord(profile, PreprocessingSource.PLATFORM_DNG).toJson()
         assertFalse(rendered.getBoolean("raw_controls_available"))
+        assertEquals("PLATFORM_DNG", rendered.getString("source"))
         assertEquals("rendered_derived", rendered.getString("signal_origin"))
-        assertEquals("SRGB", rendered.getJSONObject("display").getString("transfer"))
+        assertEquals("srgb", rendered.getJSONObject("display").getString("transfer"))
+        assertTrue(rendered.getJSONObject("profile").isNull("manual_white_balance"))
         val raw = PreprocessingRecord(profile, PreprocessingSource.CAMERA_RAW).toJson()
         assertTrue(raw.getBoolean("raw_controls_available"))
         assertEquals("uncalibrated_camera_rgb", raw.getString("primaries"))
@@ -64,20 +61,14 @@ class PreprocessingProfileJsonTest {
     }
 
     @Test
-    fun stageOrderOmitsUnavailableCorrectionsAndDefaultRenderedReencoding() {
+    fun exportOmitsRedundantStageOrder() {
         val profile = PreprocessingConfig()
         val settings = ResolvedRawPreprocessing(
             profile, WhiteBalanceGains(1f, 1f, 1f), WhiteBalanceSource.METADATA_MISSING,
             AppliedLensShading.UNAVAILABLE, 0, 0,
         )
         val raw = PreprocessingRecord(profile, PreprocessingSource.CAMERA_RAW, listOf(settings)).toJson()
-        val stages = raw.getJSONArray("effective_raw_frames").getJSONObject(0).getJSONArray("stage_order")
-        val names = (0 until stages.length()).map { stages.getString(it) }
-        assertFalse("lens_shading_clip" in names)
-        assertFalse("color_matrix" in names)
-        assertTrue("bilinear_demosaic" in names)
-        val renderedStages = PreprocessingRecord().toJson().getJSONArray("rendered_stage_order")
-        assertEquals(1, renderedStages.length())
-        assertEquals("decode_srgb", renderedStages.getString(0))
+        assertFalse(raw.getJSONArray("effective_raw_frames").getJSONObject(0).has("stage_order"))
+        assertFalse(raw.has("rendered_stage_order"))
     }
 }

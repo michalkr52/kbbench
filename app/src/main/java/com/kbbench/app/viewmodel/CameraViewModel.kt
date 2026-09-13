@@ -2131,7 +2131,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         outputRecords: List<AlgorithmOutputRecord>,
     ): String {
         val manifest = JSONObject()
-            .put("schema_version", 2)
             .put(
                 "preprocessing",
                 captureMetadata.preprocessing.toJson()
@@ -2169,8 +2168,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         manifest.put("images", imageEntries)
         manifest.put("quality_comparison", JSONObject()
             .put("domain", "srgb_rendered_8bit")
-            .put("reference_alignment", "center_crop_and_scale")
-            .put("rendering_version", ArgbTransfer.VERSION))
+            .put("reference_alignment", "center_crop_and_scale"))
 
         val resultEntries = JSONArray()
         artifacts.firstOrNull { it.role == "original_capture" }?.let { original ->

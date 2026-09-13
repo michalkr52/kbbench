@@ -94,23 +94,19 @@ data class RawCaptureSnapshot(
     }
 
     fun toJson(): JSONObject = JSONObject()
-        .put("version", VERSION)
-        .put("raw_width", rawWidth)
-        .put("raw_height", rawHeight)
-        .put("white_level", whiteLevel)
-        .put("black_level", blackLevel)
-        .put("cfa_pattern", cfaPattern)
-        .put("metadata_white_balance_gains", metadataWhiteBalanceGains?.let(::JSONArray) ?: JSONObject.NULL)
-        .put("color_matrix", colorMatrix?.let(::JSONArray) ?: JSONObject.NULL)
-        .put("shading_map", shadingMap?.toJson() ?: JSONObject.NULL)
-        .put("crop", crop?.toJson() ?: JSONObject.NULL)
-        .put("orientation_degrees", orientationDegrees)
+            .put("raw_width", rawWidth)
+            .put("raw_height", rawHeight)
+            .put("white_level", whiteLevel)
+            .put("black_level", blackLevel)
+            .put("cfa_pattern", cfaPattern)
+            .put("metadata_white_balance_gains", metadataWhiteBalanceGains?.let(::JSONArray) ?: JSONObject.NULL)
+            .put("color_matrix", colorMatrix?.let(::JSONArray) ?: JSONObject.NULL)
+            .put("shading_map", shadingMap?.toJson() ?: JSONObject.NULL)
+            .put("crop", crop?.toJson() ?: JSONObject.NULL)
+            .put("orientation_degrees", orientationDegrees)
 
     companion object {
-        const val VERSION = 1
-
         fun fromJson(json: JSONObject): RawCaptureSnapshot {
-            require(json.getInt("version") == VERSION) { "Unsupported RAW capture snapshot version" }
             return RawCaptureSnapshot(
                 rawWidth = json.getInt("raw_width"),
                 rawHeight = json.getInt("raw_height"),

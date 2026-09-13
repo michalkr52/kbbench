@@ -7,40 +7,51 @@ import com.kbbench.algorithm.preprocessing.TransferCurve
 import com.kbbench.algorithm.preprocessing.TransferEncoding
 import com.kbbench.algorithm.preprocessing.WhiteBalanceGains
 import com.kbbench.algorithm.preprocessing.WhiteBalanceMode
+import java.util.Locale
 import org.json.JSONObject
 
 object PreprocessingProfileJson {
-    fun encode(config: PreprocessingConfig): JSONObject = JSONObject()
-        .put("version", PreprocessingConfig.VERSION)
-        .put("transfer", JSONObject()
-            .put("version", TransferCurve.VERSION)
-            .put("encoding", config.transferCurve.encoding.name)
-            .put("log_strength", config.transferCurve.logStrength))
-        .put("exposure_offset_ev", config.exposureOffsetEv)
-        .put("white_balance", config.whiteBalance.name)
-        .put("manual_white_balance", JSONObject()
-            .put("red", config.manualWhiteBalance.red.toDouble())
-            .put("green", config.manualWhiteBalance.green.toDouble())
-            .put("blue", config.manualWhiteBalance.blue.toDouble()))
-        .put("lens_shading", config.lensShading.name)
-        .put("highlights", config.highlights.name)
+    fun encode(config: PreprocessingConfig): JSONObject {
+        val transfer = JSONObject()
+            .put("encoding", config.transferCurve.encoding.name.lowercase(Locale.ROOT))
+            .put("log_strength", config.transferCurve.logStrength)
+
+        val manualWhiteBalance = if (config.whiteBalance == WhiteBalanceMode.MANUAL) {
+            JSONObject()
+                .put("red", config.manualWhiteBalance.red.toDouble())
+                .put("green", config.manualWhiteBalance.green.toDouble())
+                .put("blue", config.manualWhiteBalance.blue.toDouble())
+        } else {
+            JSONObject.NULL
+        }
+
+        val profile = JSONObject()
+            .put("transfer", transfer)
+            .put("exposure_offset_ev", config.exposureOffsetEv)
+            .put("white_balance", config.whiteBalance.name.lowercase(Locale.ROOT))
+            .put("manual_white_balance", manualWhiteBalance)
+            .put("lens_shading", config.lensShading.name.lowercase(Locale.ROOT))
+            .put("highlights", config.highlights.name.lowercase(Locale.ROOT))
+        return profile
+    }
 
     fun decode(json: JSONObject): PreprocessingConfig {
-        require(json.getInt("version") == PreprocessingConfig.VERSION) { "Unsupported preprocessing profile version" }
         val transfer = json.getJSONObject("transfer")
-        require(transfer.getInt("version") == TransferCurve.VERSION) { "Unsupported transfer version" }
-        val gains = json.getJSONObject("manual_white_balance")
+        val gains = json.optJSONObject("manual_white_balance")
         return PreprocessingConfig(
             transferCurve = TransferCurve(
-                TransferEncoding.valueOf(transfer.getString("encoding")), transfer.getDouble("log_strength"),
+                TransferEncoding.valueOf(transfer.getString("encoding").uppercase(Locale.ROOT)),
+                transfer.getDouble("log_strength"),
             ),
             exposureOffsetEv = json.getDouble("exposure_offset_ev"),
-            whiteBalance = WhiteBalanceMode.valueOf(json.getString("white_balance")),
-            manualWhiteBalance = WhiteBalanceGains(
-                gains.getDouble("red").toFloat(), gains.getDouble("green").toFloat(), gains.getDouble("blue").toFloat(),
-            ),
-            lensShading = LensShadingMode.valueOf(json.getString("lens_shading")),
-            highlights = HighlightMode.valueOf(json.getString("highlights")),
+            whiteBalance = WhiteBalanceMode.valueOf(json.getString("white_balance").uppercase(Locale.ROOT)),
+            manualWhiteBalance = gains?.let {
+                WhiteBalanceGains(
+                    it.getDouble("red").toFloat(), it.getDouble("green").toFloat(), it.getDouble("blue").toFloat(),
+                )
+            } ?: WhiteBalanceGains(),
+            lensShading = LensShadingMode.valueOf(json.getString("lens_shading").uppercase(Locale.ROOT)),
+            highlights = HighlightMode.valueOf(json.getString("highlights").uppercase(Locale.ROOT)),
         )
     }
 }

@@ -33,13 +33,6 @@ class RawCaptureSnapshotTest {
         assertEquals(snapshot.shadingMap!!.gains, decoded.shadingMap!!.toShadingMap().gains.toList())
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun futureSnapshotVersionIsRejected() {
-        RawCaptureSnapshot.fromJson(RawCaptureSnapshot(
-            4, 4, 1023, 64, 0, null, null, null, null, 0,
-        ).toJson().put("version", RawCaptureSnapshot.VERSION + 1))
-    }
-
     @Test
     fun renderedRecordDoesNotPretendToHaveRawCaptureDecisions() {
         val json = PreprocessingRecord().toJson()
