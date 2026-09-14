@@ -4,11 +4,16 @@ import com.kbbench.algorithm.base.AlgorithmCategory
 import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
+import com.kbbench.algorithm.base.AlgorithmParameter
+import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
+import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.filter.GuidedFilter
+import com.kbbench.algorithm.preprocessing.TransferEncoding
+import kotlin.math.roundToInt
 
 /**
  * Single-frame edge-preserving denoising, He, Sun and Tang (ECCV 2010), Algorithm 1 applied to each
@@ -46,7 +51,35 @@ class GuidedFilterDenoise(
             maxFrames = 1,
             inputFrameType = InputFrameType.SINGLE,
         ),
-        description = "Single-frame edge-preserving denoising, per-channel self-guided filter.",
+        description = "Edge-preserving denoising guided by each channel",
+        preprocessingGuidance = AlgorithmPreprocessingGuidance(
+            recommendedTransfer = TransferEncoding.SRGB,
+        ),
+        parameters = listOf(
+            AlgorithmParameter(
+                id = "radius",
+                label = "Radius",
+                default = 8.0,
+                min = 1.0,
+                max = 32.0,
+                step = 1.0,
+                description = "Window half-width in pixels.\nIncreasing it smooths a wider area.",
+            ),
+            AlgorithmParameter(
+                id = "eps",
+                label = "Epsilon",
+                default = 0.2 * 0.2,
+                min = 0.001,
+                max = 0.25,
+                step = 0.001,
+                description = "Smoothing strength.\nIncreasing it applies more smoothing.",
+            ),
+        ),
+    )
+
+    override fun withParameters(values: Map<String, Double>): ImageAlgorithm = GuidedFilterDenoise(
+        radius = metadata.parameters.resolve(values, "radius").roundToInt(),
+        eps = metadata.parameters.resolve(values, "eps"),
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {

@@ -16,4 +16,13 @@ interface ImageAlgorithm {
 
     /** Runs the algorithm on the supplied [input] and returns the produced frame and timings. */
     fun process(input: AlgorithmInput): AlgorithmOutput
+
+    /**
+     * Returns an instance configured with the supplied tuning [values], keyed by
+     * [AlgorithmParameter.id]. Missing or out-of-range entries fall back to the declared defaults.
+     *
+     * Implementations declaring parameters must override this; the default suits algorithms with
+     * no tuning knobs.
+     */
+    fun withParameters(values: Map<String, Double>): ImageAlgorithm = this
 }

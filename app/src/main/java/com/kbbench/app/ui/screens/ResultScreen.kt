@@ -27,13 +27,17 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -46,6 +50,9 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.kbbench.app.viewmodel.BenchmarkResult
 import com.kbbench.app.viewmodel.CameraViewModel
+import com.kbbench.app.ui.components.PreprocessingSettingsDialog
+import com.kbbench.app.ui.components.AlgorithmSelectorDialog
+import com.kbbench.app.ui.components.HelpButton
 import com.kbbench.app.ui.components.HistogramOverlay
 import com.kbbench.app.ui.components.HistogramToolbar
 import com.kbbench.utils.RgbHistogram
@@ -68,7 +75,15 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var showExportDialog by remember { mutableStateOf(false) }
     var exportAsZip by remember { mutableStateOf(false) }
     var showMetricsTable by remember { mutableStateOf(false) }
+    var showAlgorithmSelector by remember { mutableStateOf(false) }
+    var showPreprocessing by remember { mutableStateOf(false) }
     val histograms by viewModel.histograms.collectAsState()
+    val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
+    val algorithmParameters by viewModel.algorithmParameters.collectAsState()
+    val preprocessingConfig by viewModel.preprocessingConfig.collectAsState()
+    val canRerun by viewModel.canRerun.collectAsState()
+    val canReprocessFromSource by viewModel.canReprocessFromSource.collectAsState()
+    val isProcessing by viewModel.isProcessing.collectAsState()
 
     val loadReferenceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
@@ -145,6 +160,28 @@ fun ResultScreen(viewModel: CameraViewModel) {
                             )
                         }
                     } else if (selectedIndex == null && !isSelectingForCompare) {
+                        if (canRerun && !showMetricsTable) {
+                            IconButton(
+                                onClick = { showAlgorithmSelector = true },
+                                enabled = !isProcessing
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Adjust parameters and re-run"
+                                )
+                            }
+                        }
+                        if (canReprocessFromSource && !showMetricsTable) {
+                            IconButton(
+                                onClick = { showPreprocessing = true },
+                                enabled = !isProcessing,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Adjust preprocessing and reprocess",
+                                )
+                            }
+                        }
                         if (referenceImage != null && !showMetricsTable) {
                             IconButton(onClick = { showMetricsTable = true }) {
                                 Icon(
@@ -234,6 +271,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         results = results,
                         isSelectingForCompare = isSelectingForCompare,
                         compareSelection = compareSelection,
+                        isProcessing = isProcessing,
                         onItemClick = { index ->
                             if (isSelectingForCompare) {
                                 compareSelection = if (index in compareSelection) {
@@ -300,11 +338,61 @@ fun ResultScreen(viewModel: CameraViewModel) {
             }
         )
     }
+
+    if (showAlgorithmSelector) {
+        AlgorithmSelectorDialog(
+            algorithms = viewModel.availableAlgorithms.map { it.metadata },
+            enabledAlgorithmNames = enabledAlgorithmNames,
+            parameterValues = algorithmParameters,
+            onAlgorithmEnabledChanged = viewModel::setAlgorithmEnabled,
+            onAllAlgorithmsEnabledChanged = viewModel::setAllAlgorithmsEnabled,
+            onParameterChanged = viewModel::setAlgorithmParameter,
+            onParameterCommit = viewModel::commitAlgorithmParameters,
+            onResetParameters = viewModel::resetAlgorithmParameters,
+            confirmLabel = "Re-run",
+            helpTitle = "Re-run algorithms",
+            helpSections = listOf(
+                "Choose algorithms" to "Re-run algorithms on the previously processed input image(s). Select algorithms by checking the corresponding checkboxes.",
+                "Adjust parameters" to "You can adjust algorithm parameters by pressing on them. Your changes are saved for future sessions.",
+            ),
+            onConfirm = {
+                showAlgorithmSelector = false
+                selectedIndex = null
+                compareIndices = null
+                viewModel.rerunBenchmarks(context)
+            },
+            onDismiss = { showAlgorithmSelector = false }
+        )
+    }
+    if (showPreprocessing) {
+        PreprocessingSettingsDialog(
+            initial = preprocessingConfig,
+            onConfirm = { config ->
+                viewModel.setPreprocessingConfig(config)
+                showPreprocessing = false
+                selectedIndex = null
+                compareIndices = null
+                viewModel.reprocessFromSource(context)
+            },
+            onDismiss = { showPreprocessing = false },
+        )
+    }
+
+    if (isProcessing) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
+    }
 }
 
 /** Capture-derived artifacts (original + preprocessed frames + reference) shown ahead of algorithm outputs. */
 private fun BenchmarkResult.isInputTile(): Boolean =
-    id == "original" || id == "reference" || id.startsWith("preprocessed_")
+    id == "reference" || id.startsWith("preprocessed_")
 
 private enum class MetricsSortColumn {
     ALGORITHM,
@@ -542,6 +630,7 @@ fun ResultGridView(
     results: List<BenchmarkResult>,
     isSelectingForCompare: Boolean,
     compareSelection: Set<Int>,
+    isProcessing: Boolean,
     onItemClick: (Int) -> Unit,
     onSelectForCompare: () -> Unit,
     onCancelCompare: () -> Unit,
@@ -591,24 +680,44 @@ fun ResultGridView(
         // Bottom action bar
         Surface(
             tonalElevation = 3.dp,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .alpha(if (isProcessing) 0.45f else 1f)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                HelpButton(
+                    title = "Benchmark results",
+                    sections = listOf(
+                        "" to "This view presents the results of the benchmark run. Input shows the prepared images used for the run and your reference image, if loaded. Results shows each algorithm's output.",
+                        "Inspect and compare" to "Tap a tile to open it full screen. Pinch or double-tap to zoom, and swipe between images when zoomed out. Use Select for comparison, choose two images, then tap Compare to view them together. The histogram button toggles the colour distribution overlay.",
+                        "Calculate quality metrics" to "Tap the upload button beside the reference image prompt, then choose a reference showing the same scene and framing. Quality metrics of algorithm outputs will be computed against the reference image. Press the table button in the top bar to view a compact table view of the results.",
+                        "Retry with adjustments" to "Use the algorithm and preprocessing settings buttons in the top bar to adjust the respective settings. The algorithms will be rerun on the same prepared inputs and reference image.",
+                        "Export benchmark results" to "You can export the benchmark results, including all image files and a JSON report with the run's settings and metrics. Tap the share button in the top bar, then Export and choose a destination in the sharing menu.",
+                    ),
+                )
+                Spacer(Modifier.weight(1f))
                 if (isSelectingForCompare) {
-                    OutlinedButton(onClick = onCancelCompare) {
+                    OutlinedButton(
+                        onClick = onCancelCompare,
+                        enabled = !isProcessing
+                    ) {
                         Text("Cancel")
                     }
                     Button(
                         onClick = onCompare,
-                        enabled = compareSelection.size == 2
+                        enabled = !isProcessing && compareSelection.size == 2
                     ) {
                         Text("Compare")
                     }
                 } else {
-                    OutlinedButton(onClick = onSelectForCompare) {
+                    OutlinedButton(
+                        onClick = onSelectForCompare,
+                        enabled = !isProcessing
+                    ) {
                         Text("Select for comparison")
                     }
                 }
@@ -769,15 +878,29 @@ fun ResultFullscreenView(
         // Metrics overlay
         val currentResult = results[pagerState.currentPage]
         val displayMetrics = currentResult.metrics.toDisplayList()
+        val inputFrameDescription = currentResult.inputFrameDescription()
+        val hasDetails = displayMetrics.isNotEmpty() ||
+            currentResult.subtitle != null ||
+            inputFrameDescription != null
 
-        if (displayMetrics.isNotEmpty()) {
+        if (hasDetails) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Metrics", style = MaterialTheme.typography.titleMedium)
-                    currentResult.inputFrameDescription()?.let { description ->
+                    Text(
+                        if (displayMetrics.isNotEmpty()) "Metrics" else "Preprocessing",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    currentResult.subtitle?.let { subtitle ->
+                        Text(
+                            text = subtitle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    inputFrameDescription?.let { description ->
                         Text(
                             text = description,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
@@ -800,14 +923,14 @@ fun ResultFullscreenView(
 }
 
 private fun BenchmarkResult.inputFrameDescription(): String? {
-    if (inputFrameIndices.isEmpty()) return null
+    if (inputFrameIndices.isEmpty() || capturedFrameCount == 1) return null
     val frames = inputFrameIndices.joinToString(", ") { (it + 1).toString() }
     return "Input frames: $frames"
 }
 
 /** Fullscreen title must disambiguate preprocessed frames, since the grid's "Frame X of Y" caption isn't shown there. */
 private fun BenchmarkResult.fullscreenTitle(): String {
-    if (preprocessedFrameIndex != null && preprocessedFrameCount != null) {
+    if (preprocessedFrameIndex != null && preprocessedFrameCount != null && preprocessedFrameCount > 1) {
         return "$title (Frame ${preprocessedFrameIndex + 1} of $preprocessedFrameCount)"
     }
     return title
@@ -864,7 +987,10 @@ private fun ResultLabel(
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
-        if (result.preprocessedFrameIndex != null && result.preprocessedFrameCount != null) {
+        if (result.preprocessedFrameIndex != null &&
+            result.preprocessedFrameCount != null &&
+            result.preprocessedFrameCount > 1
+        ) {
             Text(
                 text = result.title,
                 style = MaterialTheme.typography.labelSmall

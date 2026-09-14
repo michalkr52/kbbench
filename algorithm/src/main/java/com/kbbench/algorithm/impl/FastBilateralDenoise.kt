@@ -4,11 +4,15 @@ import com.kbbench.algorithm.base.AlgorithmCategory
 import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
+import com.kbbench.algorithm.base.AlgorithmParameter
+import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
+import com.kbbench.algorithm.base.resolve
 import com.kbbench.algorithm.filter.BilateralGrid
+import com.kbbench.algorithm.preprocessing.TransferEncoding
 
 /**
  * Single-frame edge-preserving denoising, Paris and Durand (ECCV 2006). Runs on
@@ -47,7 +51,35 @@ class FastBilateralDenoise(
             maxFrames = 1,
             inputFrameType = InputFrameType.SINGLE,
         ),
-        description = "Single-frame bilateral denoising approximated on a downsampled bilateral grid.",
+        description = "Bilateral denoising on a downsampled grid",
+        preprocessingGuidance = AlgorithmPreprocessingGuidance(
+            recommendedTransfer = TransferEncoding.SRGB,
+        ),
+        parameters = listOf(
+            AlgorithmParameter(
+                id = "sigmaSpatial",
+                label = "Spatial sigma",
+                default = 16.0,
+                min = 2.0,
+                max = 64.0,
+                step = 1.0,
+                description = "Spatial blur scale in pixels.\nIncreasing it smooths a wider area.",
+            ),
+            AlgorithmParameter(
+                id = "sigmaRange",
+                label = "Range sigma",
+                default = 0.1,
+                min = 0.01,
+                max = 0.5,
+                step = 0.01,
+                description = "Intensity distance treated as noise.\nIncreasing it smooths across stronger edges.",
+            ),
+        ),
+    )
+
+    override fun withParameters(values: Map<String, Double>): ImageAlgorithm = FastBilateralDenoise(
+        sigmaSpatial = metadata.parameters.resolve(values, "sigmaSpatial"),
+        sigmaRange = metadata.parameters.resolve(values, "sigmaRange"),
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {

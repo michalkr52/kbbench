@@ -1,5 +1,7 @@
 package com.kbbench.algorithm.base
 
+import com.kbbench.algorithm.preprocessing.TransferEncoding
+
 /**
  * High-level category describing what an algorithm primarily does.
  */
@@ -49,6 +51,17 @@ data class FrameRequirements(
 )
 
 /**
+ * Guidance for selecting a preprocessing profile for an algorithm.
+ *
+ * Recommendations are informational; they never alter the caller's profile. A required transfer
+ * encoding is reserved for algorithms whose documented meaning would not hold in another domain.
+ */
+data class AlgorithmPreprocessingGuidance(
+    val recommendedTransfer: TransferEncoding? = null,
+    val requiredTransfer: TransferEncoding? = null,
+)
+
+/**
  * Descriptive metadata exposed by every [ImageAlgorithm] for UI, filtering and validation.
  *
  * @property name Human-readable unique name of the algorithm.
@@ -57,6 +70,8 @@ data class FrameRequirements(
  * @property frameRequirements Requirements describing how many frames and what kind of frames
  *   should be supplied.
  * @property description Short summary suitable for UI or logs.
+ * @property preprocessingGuidance Recommendation for the selected profile.
+ * @property parameters User-adjustable tuning knobs, empty when the algorithm has none.
  */
 data class AlgorithmMetadata(
     val name: String,
@@ -64,4 +79,6 @@ data class AlgorithmMetadata(
     val category: AlgorithmCategory,
     val frameRequirements: FrameRequirements,
     val description: String,
+    val preprocessingGuidance: AlgorithmPreprocessingGuidance = AlgorithmPreprocessingGuidance(),
+    val parameters: List<AlgorithmParameter> = emptyList(),
 )

@@ -4,10 +4,14 @@ import com.kbbench.algorithm.base.AlgorithmCategory
 import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.base.AlgorithmMetadata
 import com.kbbench.algorithm.base.AlgorithmOutput
+import com.kbbench.algorithm.base.AlgorithmParameter
+import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
 import com.kbbench.algorithm.base.measureMs
+import com.kbbench.algorithm.base.resolve
+import com.kbbench.algorithm.preprocessing.TransferEncoding
 import kotlin.math.max
 import kotlin.math.min
 
@@ -54,7 +58,25 @@ class LinearUnsharpMasking(
             maxFrames = 1,
             inputFrameType = InputFrameType.SINGLE,
         ),
-        description = "Single-frame unsharp masking with a fixed gain on the 4-neighbour Laplacian.",
+        description = "Unsharp masking with a fixed 4-neighbour Laplacian gain",
+        preprocessingGuidance = AlgorithmPreprocessingGuidance(
+            recommendedTransfer = TransferEncoding.SRGB,
+        ),
+        parameters = listOf(
+            AlgorithmParameter(
+                id = "lambda",
+                label = "Lambda",
+                default = 0.5,
+                min = 0.0,
+                max = 3.0,
+                step = 0.05,
+                description = "Sharpening strength.\nIncreasing it applies more sharpening.",
+            ),
+        ),
+    )
+
+    override fun withParameters(values: Map<String, Double>): ImageAlgorithm = LinearUnsharpMasking(
+        lambda = metadata.parameters.resolve(values, "lambda"),
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
