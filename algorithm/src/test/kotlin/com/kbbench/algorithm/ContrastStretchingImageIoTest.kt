@@ -18,9 +18,7 @@ class ContrastStretchingImageIoTest {
         val pixels = readPixels(image)
 
         val input = AlgorithmInput(
-            frames = listOf(pixels),
-            width = width,
-            height = height,
+            frames = listOf(frameOf(pixels, width, height)),
             exposureTimes = listOf(10_000_000L),
             isoValues = listOf(100),
             captureTimeMs = 0L,
@@ -29,12 +27,12 @@ class ContrastStretchingImageIoTest {
         val before = computeMetrics(pixels)
 
         val output = ContrastStretching().process(input)
-        val after = computeMetrics(output.pixels)
-        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.pixels)
+        val after = computeMetrics(output.frame.toArgb())
+        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.frame.toArgb())
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
-        assertEquals(width * height, output.pixels.size)
+        assertEquals(width * height, output.frame.size)
         assertTrue(!quality.psnr.isNaN(), "PSNR should be a valid number or +Infinity")
         assertTrue(quality.ssim in -1.0..1.0, "SSIM should stay in [-1, 1], got ${quality.ssim}")
 
@@ -44,7 +42,7 @@ class ContrastStretchingImageIoTest {
         assertTrue(after.b.range >= before.b.range, "B range shrank: ${before.b.range} -> ${after.b.range}")
 
         val outputFile = File("build/test-output/contrast_output.png")
-        writePng(output.pixels, width, height, outputFile)
+        writePng(output.frame.toArgb(), width, height, outputFile)
 
         val metricsFile = File("build/test-output/contrast_metrics.txt")
         metricsFile.writeText(

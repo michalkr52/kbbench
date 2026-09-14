@@ -1,5 +1,7 @@
 package com.kbbench.algorithm
 
+import com.kbbench.algorithm.base.AlgorithmInput
+import com.kbbench.algorithm.base.Frame
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
@@ -12,6 +14,24 @@ import kotlin.test.assertTrue
  * Anything specific to one algorithm's claims stays in that algorithm's test class; what lives here
  * is used by at least two.
  */
+
+/**
+ * Wraps an ARGB fixture as a [Frame] at the depth it actually came from.
+ *
+ * Fixtures stay ARGB because the promotion to the internal scale is lossless for 8-bit input, so a
+ * pixel assertion written against the packed form keeps its exact meaning after the round trip.
+ */
+internal fun frameOf(pixels: IntArray, width: Int, height: Int): Frame =
+    Frame.fromArgb(pixels, width, height, sourceDepth = 8)
+
+/** Builds a single- or multi-frame input from ARGB fixtures, with placeholder capture metadata. */
+internal fun inputOf(width: Int, height: Int, vararg pixels: IntArray): AlgorithmInput =
+    AlgorithmInput(
+        frames = pixels.map { frameOf(it, width, height) },
+        exposureTimes = List(pixels.size) { 10_000_000L },
+        isoValues = List(pixels.size) { 100 },
+        captureTimeMs = 0L,
+    )
 
 internal fun argb(a: Int, r: Int, g: Int, b: Int): Int =
     (a shl 24) or (r shl 16) or (g shl 8) or b
@@ -134,7 +154,7 @@ internal fun assertChannelsWithin(expected: IntArray, actual: IntArray, toleranc
  *
  * Uses the same luma-driven shared weight as the grid so the two are comparable, and truncates the
  * spatial kernel at [BILATERAL_KERNEL_RADIUS] standard deviations to match the reach of the grid's
- * five-tap blur. Cost is O(sigmaSpatial^2) per pixel, so keep the images small.
+ * five-tap blur. [sigmaRange] is in normalized `[0, 1]` units, as the grid takes it. Cost is O(sigmaSpatial^2) per pixel, so keep the images small.
  */
 internal fun bruteForceBilateral(
     src: IntArray,
@@ -191,8 +211,9 @@ internal fun bruteForceBilateral(
 /** Matches the reach of the grid's `[1, 4, 6, 4, 1]` blur, in standard deviations. */
 internal const val BILATERAL_KERNEL_RADIUS = 2
 
+/** Rec. 601 luma normalized to `[0, 1]`, matching the domain the filters compare `sigmaRange` in. */
 private fun testLuma(pixel: Int): Double =
-    0.299 * ((pixel shr 16) and 0xFF) + 0.587 * ((pixel shr 8) and 0xFF) + 0.114 * (pixel and 0xFF)
+    (0.299 * ((pixel shr 16) and 0xFF) + 0.587 * ((pixel shr 8) and 0xFF) + 0.114 * (pixel and 0xFF)) / 255.0
 
 /** Extracts a centred [size] x [size] crop, for references too costly to run on a full frame. */
 internal fun centreCrop(src: IntArray, width: Int, height: Int, size: Int): IntArray {

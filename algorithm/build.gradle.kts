@@ -15,3 +15,8 @@ kotlin {
 dependencies {
     testImplementation(kotlin("test"))
 }
+
+tasks.test {
+    // Gradle does not forward command-line -D to the test JVM; GoldenOutputTest needs this one.
+    systemProperty("golden.regenerate", providers.systemProperty("golden.regenerate").getOrElse("false"))
+}

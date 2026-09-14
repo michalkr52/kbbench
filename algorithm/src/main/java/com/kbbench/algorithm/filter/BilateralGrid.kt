@@ -1,5 +1,6 @@
 package com.kbbench.algorithm.filter
 
+import com.kbbench.algorithm.base.Frame
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -44,8 +45,8 @@ object BilateralGrid {
      */
     private const val GRID_PLANES = 5
 
-    private const val ALPHA_MASK = 0xFF shl 24
-    private const val MAX_LEVEL = 255.0
+    /** Top of the normalized intensity range the range axis spans. */
+    private const val MAX_LEVEL = 1.0
 
     /** Below this a cell had no meaningful support and the division would amplify noise. */
     private const val WEIGHT_FLOOR = 1e-6
@@ -55,32 +56,26 @@ object BilateralGrid {
      * of those needs splatted rows within [KERNEL_RADIUS] cells of it, so a band loads exactly the
      * pixel rows rounding into that widened window.
      *
-     * @param src ARGB_8888 pixels, row-major, exactly `width * height` entries.
      * @param sigmaSpatial Spatial standard deviation in pixels, strictly positive. Doubles as the
      *   grid's spatial cell size, so raising it makes the filter cheaper rather than costlier.
-     * @param sigmaRange Range standard deviation on the 8-bit intensity scale, strictly positive.
+     * @param sigmaRange Range standard deviation in normalized `[0, 1]` units, strictly positive.
      *   Doubles as the grid's cell depth.
      * @param bandHeight Rows produced per band; `0` derives one from [TARGET_WORKING_BYTES].
-     * @return a new ARGB_8888 array of the same dimensions, alpha copied from [src].
-     * @throws IllegalArgumentException if the dimensions disagree with [src], or a sigma is not
-     *   positive.
+     * @return a new frame of the same geometry and reported depth.
+     * @throws IllegalArgumentException if a sigma is not positive.
      */
     fun filter(
-        src: IntArray,
-        width: Int,
-        height: Int,
+        src: Frame,
         sigmaSpatial: Double,
         sigmaRange: Double,
         bandHeight: Int = 0,
-    ): IntArray {
-        require(width > 0 && height > 0) { "Image must be non-empty, got ${width}x$height" }
-        require(src.size == width * height) {
-            "Pixel array of ${src.size} does not match ${width}x$height"
-        }
+    ): Frame {
         require(sigmaSpatial > 0.0) { "sigmaSpatial must be > 0, got $sigmaSpatial" }
         require(sigmaRange > 0.0) { "sigmaRange must be > 0, got $sigmaRange" }
 
-        val out = IntArray(src.size)
+        val width = src.width
+        val height = src.height
+        val out = src.emptyLike()
 
         // Sized from `round`, matching how splat picks a cell: the last pixel of a row can round
         // up past `floor((width - 1) / ss)`, and folding it back would distort the border.
@@ -147,7 +142,7 @@ object BilateralGrid {
      * construction no sliced row depends on them.
      */
     private fun splat(
-        src: IntArray,
+        src: Frame,
         width: Int,
         fromRow: Int,
         toRow: Int,
@@ -168,18 +163,14 @@ object BilateralGrid {
 
             val row = y * width
             for (x in 0 until width) {
-                val pixel = src[row + x]
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-
+                val i = row + x
                 val gx = (x / sigmaSpatial).roundToInt()
-                val gz = (luma(r, g, b) / sigmaRange).roundToInt().coerceIn(0, gridDepth - 1)
+                val gz = (src.luma(i) / sigmaRange).roundToInt().coerceIn(0, gridDepth - 1)
                 val index = ((gy * gridWidth) + gx) * gridDepth + gz
 
-                weightedR[index] += r.toFloat()
-                weightedG[index] += g.toFloat()
-                weightedB[index] += b.toFloat()
+                weightedR[index] += src.r(i)
+                weightedG[index] += src.g(i)
+                weightedB[index] += src.b(i)
                 weights[index] += 1f
             }
         }
@@ -229,8 +220,8 @@ object BilateralGrid {
      * own continuous position.
      */
     private fun slice(
-        src: IntArray,
-        out: IntArray,
+        src: Frame,
+        out: Frame,
         width: Int,
         y0: Int,
         y1: Int,
@@ -250,27 +241,38 @@ object BilateralGrid {
             val row = y * width
 
             for (x in 0 until width) {
-                val pixel = src[row + x]
-                val r = (pixel shr 16) and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = pixel and 0xFF
-
+                val i = row + x
                 val fx = x / sigmaSpatial
-                val fz = (luma(r, g, b) / sigmaRange).coerceIn(0.0, (gridDepth - 1).toDouble())
+                val fz = (src.luma(i) / sigmaRange).coerceIn(0.0, (gridDepth - 1).toDouble())
 
                 val weight = interpolate(weights, fy, fx, fz, gridRows, gridWidth, gridDepth)
-                out[row + x] = if (weight <= WEIGHT_FLOOR) {
+                if (weight <= WEIGHT_FLOOR) {
                     // No sample landed nearby; the input is the only defensible answer.
-                    pixel
+                    out.red[i] = src.red[i]
+                    out.green[i] = src.green[i]
+                    out.blue[i] = src.blue[i]
                 } else {
-                    (pixel and ALPHA_MASK) or
-                        (round(interpolate(weightedR, fy, fx, fz, gridRows, gridWidth, gridDepth) / weight) shl 16) or
-                        (round(interpolate(weightedG, fy, fx, fz, gridRows, gridWidth, gridDepth) / weight) shl 8) or
-                        round(interpolate(weightedB, fy, fx, fz, gridRows, gridWidth, gridDepth) / weight)
+                    out.red[i] = resolved(weightedR, fy, fx, fz, gridRows, gridWidth, gridDepth, weight)
+                    out.green[i] = resolved(weightedG, fy, fx, fz, gridRows, gridWidth, gridDepth, weight)
+                    out.blue[i] = resolved(weightedB, fy, fx, fz, gridRows, gridWidth, gridDepth, weight)
                 }
             }
         }
     }
+
+    /** @return one homogeneous plane sampled at the pixel, divided by its accumulated weight. */
+    private fun resolved(
+        grid: FloatArray,
+        fy: Double,
+        fx: Double,
+        fz: Double,
+        gridRows: Int,
+        gridWidth: Int,
+        gridDepth: Int,
+        weight: Double,
+    ): Short = Frame.store(
+        (interpolate(grid, fy, fx, fz, gridRows, gridWidth, gridDepth) / weight).toFloat()
+    )
 
     /**
      * @return [grid] sampled trilinearly at `(fy, fx, fz)` in cell units. Corners outside the grid
@@ -318,10 +320,6 @@ object BilateralGrid {
         }
         return sum
     }
-
-    private fun luma(r: Int, g: Int, b: Int): Double = 0.299 * r + 0.587 * g + 0.114 * b
-
-    private fun round(value: Double): Int = (value + 0.5).toInt().coerceIn(0, 255)
 
     /**
      * @return grid rows a band buffer must hold, including the [KERNEL_RADIUS] halo on each side.

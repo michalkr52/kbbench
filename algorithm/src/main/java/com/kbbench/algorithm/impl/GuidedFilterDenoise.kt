@@ -32,7 +32,7 @@ import kotlin.math.roundToInt
  */
 class GuidedFilterDenoise(
     private val radius: Int = 8,
-    eps: Double = 0.2 * 0.2,
+    private val eps: Double = 0.2 * 0.2,
 ) : ImageAlgorithm {
 
     init {
@@ -40,9 +40,7 @@ class GuidedFilterDenoise(
         require(eps > 0.0) { "GuidedFilter requires eps > 0, got $eps" }
     }
 
-    private val scaledEps: Double = eps * 255.0 * 255.0
-
-    override val metadata: AlgorithmMetadata = AlgorithmMetadata(
+        override val metadata: AlgorithmMetadata = AlgorithmMetadata(
         name = "GuidedFilter",
         kind = "Denoise",
         category = AlgorithmCategory.DENOISE,
@@ -83,25 +81,16 @@ class GuidedFilterDenoise(
     )
 
     override fun process(input: AlgorithmInput): AlgorithmOutput {
-        require(input.frames.isNotEmpty()) { "GuidedFilter requires at least one frame" }
-
         val src = input.frames.first()
 
         val (out, processMs) = measureMs {
             GuidedFilter.filterGray(
                 src = src,
-                width = input.width,
-                height = input.height,
                 radius = radius,
-                eps = scaledEps,
+                eps = eps,
             )
         }
 
-        return AlgorithmOutput(
-            pixels = out,
-            width = input.width,
-            height = input.height,
-            totalTime = processMs,
-        )
+        return AlgorithmOutput(frame = out, totalTime = processMs)
     }
 }

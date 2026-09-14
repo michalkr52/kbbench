@@ -27,9 +27,7 @@ class AdaptiveUnsharpMaskImageIoTest {
         val pixels = readPixels(image)
 
         val input = AlgorithmInput(
-            frames = listOf(pixels),
-            width = width,
-            height = height,
+            frames = listOf(frameOf(pixels, width, height)),
             exposureTimes = listOf(10_000_000L),
             isoValues = listOf(100),
             captureTimeMs = 0L,
@@ -40,11 +38,11 @@ class AdaptiveUnsharpMaskImageIoTest {
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
-        assertEquals(width * height, output.pixels.size)
+        assertEquals(width * height, output.frame.size)
 
         val before = computeMetrics(pixels)
-        val after = computeMetrics(output.pixels)
-        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.pixels)
+        val after = computeMetrics(output.frame.toArgb())
+        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.frame.toArgb())
 
         assertTrue(!quality.psnr.isNaN(), "PSNR should be a valid number or +Infinity")
         assertTrue(quality.ssim in -1.0..1.0, "SSIM out of range, got ${quality.ssim}")
@@ -57,7 +55,7 @@ class AdaptiveUnsharpMaskImageIoTest {
         )
 
         val outputFile = File("build/test-output/aum_output.png")
-        writePng(output.pixels, width, height, outputFile)
+        writePng(output.frame.toArgb(), width, height, outputFile)
         assertTrue(outputFile.exists(), "Brak pliku wyjsciowego: ${outputFile.path}")
 
         // The automatic band height fits this photo in a single band, so force a split as well:
@@ -98,18 +96,5 @@ class AdaptiveUnsharpMaskImageIoTest {
     }
 
     private fun sharpen(src: IntArray, width: Int, height: Int, bandHeight: Int): IntArray =
-        AdaptiveDirectionalUnsharpMask.sharpen(
-            src = src,
-            width = width,
-            height = height,
-            tau1 = 60.0,
-            tau2 = 200.0,
-            alphaB = 1.0,
-            alphaDl = 3.0,
-            alphaDh = 4.0,
-            mu = 0.1,
-            beta = 0.5,
-            maxGain = 4.0,
-            bandHeight = bandHeight,
-        )
+        AdaptiveDirectionalUnsharpMask.sharpen(frameOf(src, width, height), tau1 = 60.0, tau2 = 200.0, alphaB = 1.0, alphaDl = 3.0, alphaDh = 4.0, mu = 0.1, beta = 0.5, maxGain = 4.0, bandHeight = bandHeight).toArgb()
 }

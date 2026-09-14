@@ -30,9 +30,7 @@ class GuidedFilterImageIoTest {
         val pixels = readPixels(image)
 
         val input = AlgorithmInput(
-            frames = listOf(pixels),
-            width = width,
-            height = height,
+            frames = listOf(frameOf(pixels, width, height)),
             exposureTimes = listOf(10_000_000L),
             isoValues = listOf(100),
             captureTimeMs = 0L,
@@ -57,10 +55,10 @@ class GuidedFilterImageIoTest {
 
             assertEquals(width, output.width)
             assertEquals(height, output.height)
-            assertEquals(width * height, output.pixels.size)
+            assertEquals(width * height, output.frame.size)
 
-            val after = computeMetrics(output.pixels)
-            val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.pixels)
+            val after = computeMetrics(output.frame.toArgb())
+            val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.frame.toArgb())
 
             assertTrue(!quality.psnr.isNaN(), "${algorithm.name}: PSNR should be a valid number or +Infinity")
             assertTrue(quality.ssim in -1.0..1.0, "${algorithm.name}: SSIM out of range, got ${quality.ssim}")
@@ -72,7 +70,7 @@ class GuidedFilterImageIoTest {
             )
 
             val outputFile = File("build/test-output/${slug}_output.png")
-            writePng(output.pixels, width, height, outputFile)
+            writePng(output.frame.toArgb(), width, height, outputFile)
             assertTrue(outputFile.exists(), "Brak pliku wyjsciowego: ${outputFile.path}")
 
             report.appendLine()
@@ -94,8 +92,8 @@ class GuidedFilterImageIoTest {
         // The automatic band height fits this photo in a single band, so force a split here too:
         // real images have large flat regions where the variance cancellation is most delicate.
         assertContentEquals(
-            GuidedFilter.filterGray(pixels, width, height, radius = 4, eps = EPS_8BIT, bandHeight = height),
-            GuidedFilter.filterGray(pixels, width, height, radius = 4, eps = EPS_8BIT, bandHeight = 64),
+            GuidedFilter.filterGray(frameOf(pixels, width, height), radius = 4, eps = EPS_8BIT, bandHeight = height).toArgb(),
+            GuidedFilter.filterGray(frameOf(pixels, width, height), radius = 4, eps = EPS_8BIT, bandHeight = 64).toArgb(),
             "banded run over the real photo diverged from the single-band run",
         )
 

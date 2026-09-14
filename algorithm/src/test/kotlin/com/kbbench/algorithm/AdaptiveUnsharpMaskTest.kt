@@ -134,7 +134,7 @@ class AdaptiveUnsharpMaskTest {
     }
 
     @Test
-    fun preservesAlphaAndDimensions() {
+    fun outputIsOpaqueAndKeepsDimensions() {
         val width = 15
         val height = 9
         val random = Random(8)
@@ -142,9 +142,7 @@ class AdaptiveUnsharpMaskTest {
             argb(random.nextInt(256), random.nextInt(256), random.nextInt(256), random.nextInt(256))
         }
         val input = AlgorithmInput(
-            frames = listOf(src),
-            width = width,
-            height = height,
+            frames = listOf(frameOf(src, width, height)),
             exposureTimes = listOf(10_000_000L),
             isoValues = listOf(100),
             captureTimeMs = 0L,
@@ -154,9 +152,10 @@ class AdaptiveUnsharpMaskTest {
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
-        assertEquals(width * height, output.pixels.size)
+        assertEquals(width * height, output.frame.size)
+        val packed = output.frame.toArgb()
         for (i in src.indices) {
-            assertEquals(src[i] ushr 24, output.pixels[i] ushr 24, "alpha changed at index $i")
+            assertEquals(0xFF, packed[i] ushr 24, "output should be opaque at index $i")
         }
     }
 
@@ -190,11 +189,9 @@ class AdaptiveUnsharpMaskTest {
         beta: Double = 0.5,
         bandHeight: Int = 0,
     ): IntArray = AdaptiveDirectionalUnsharpMask.sharpen(
-        src = src,
-        width = width,
-        height = height,
-        tau1 = tau1,
-        tau2 = tau2,
+        src = frameOf(src, width, height),
+        tau1 = tau1 * VARIANCE_SCALE,
+        tau2 = tau2 * VARIANCE_SCALE,
         alphaB = 1.0,
         alphaDl = 3.0,
         alphaDh = 4.0,
@@ -202,7 +199,7 @@ class AdaptiveUnsharpMaskTest {
         beta = beta,
         maxGain = 4.0,
         bandHeight = bandHeight,
-    )
+    ).toArgb()
 
     /** Ratio of output to input peak-to-peak swing, measured past the adaptation transient. */
     private fun amplification(src: IntArray, width: Int, height: Int, row: Int): Double {
@@ -229,4 +226,8 @@ class AdaptiveUnsharpMaskTest {
             argb(255, v, v, v)
         }
 
+    private companion object {
+        /** Tau is quoted by the paper as an 8-bit variance; the filter takes it normalized. */
+        const val VARIANCE_SCALE = 1.0 / (255.0 * 255.0)
+    }
 }

@@ -30,9 +30,7 @@ class BilateralImageIoTest {
         val algorithm = FastBilateralDenoise()
         val output = algorithm.process(
             AlgorithmInput(
-                frames = listOf(pixels),
-                width = width,
-                height = height,
+                frames = listOf(frameOf(pixels, width, height)),
                 exposureTimes = listOf(10_000_000L),
                 isoValues = listOf(100),
                 captureTimeMs = 0L,
@@ -41,11 +39,11 @@ class BilateralImageIoTest {
 
         assertEquals(width, output.width)
         assertEquals(height, output.height)
-        assertEquals(width * height, output.pixels.size)
+        assertEquals(width * height, output.frame.size)
 
         val before = computeMetrics(pixels)
-        val after = computeMetrics(output.pixels)
-        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.pixels)
+        val after = computeMetrics(output.frame.toArgb())
+        val quality = calculateQualityMetrics(referencePixels = pixels, candidatePixels = output.frame.toArgb())
 
         assertTrue(!quality.psnr.isNaN(), "PSNR should be a valid number or +Infinity")
         assertTrue(quality.ssim in -1.0..1.0, "SSIM out of range, got ${quality.ssim}")
@@ -55,12 +53,12 @@ class BilateralImageIoTest {
         )
 
         val outputFile = File("build/test-output/bilateral_output.png")
-        writePng(output.pixels, width, height, outputFile)
+        writePng(output.frame.toArgb(), width, height, outputFile)
 
         // Brute force is O(sigmaSpatial^2) per pixel, so the fidelity check runs on a crop.
         val cropSize = minOf(CROP_SIZE, width, height)
         val crop = centreCrop(pixels, width, height, cropSize)
-        val approximate = BilateralGrid.filter(crop, cropSize, cropSize, SIGMA_SPATIAL, SIGMA_RANGE)
+        val approximate = BilateralGrid.filter(frameOf(crop, cropSize, cropSize), SIGMA_SPATIAL, SIGMA_RANGE).toArgb()
         val exact = bruteForceBilateral(crop, cropSize, cropSize, SIGMA_SPATIAL, SIGMA_RANGE)
         val fidelity = calculateQualityMetrics(referencePixels = exact, candidatePixels = approximate)
 

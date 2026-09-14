@@ -26,12 +26,12 @@ class GuidedFilterTest {
         val src = noiseImage(width, height, seed = 11)
 
         for (radius in intArrayOf(1, 4, 8)) {
-            val wholeGray = GuidedFilter.filterGray(src, width, height, radius, EPS, bandHeight = height)
-            val bandedGray = GuidedFilter.filterGray(src, width, height, radius, EPS, bandHeight = 7)
+            val wholeGray = GuidedFilter.filterGray(frameOf(src, width, height), radius, EPS, bandHeight = height).toArgb()
+            val bandedGray = GuidedFilter.filterGray(frameOf(src, width, height), radius, EPS, bandHeight = 7).toArgb()
             assertContentEquals(wholeGray, bandedGray, "gray variant diverged at radius=$radius")
 
-            val wholeColor = GuidedFilter.filterColor(src, width, height, radius, EPS, bandHeight = height)
-            val bandedColor = GuidedFilter.filterColor(src, width, height, radius, EPS, bandHeight = 7)
+            val wholeColor = GuidedFilter.filterColor(frameOf(src, width, height), radius, EPS, bandHeight = height).toArgb()
+            val bandedColor = GuidedFilter.filterColor(frameOf(src, width, height), radius, EPS, bandHeight = 7).toArgb()
             assertContentEquals(wholeColor, bandedColor, "color variant diverged at radius=$radius")
         }
     }
@@ -42,9 +42,9 @@ class GuidedFilterTest {
         val height = 30
         val src = noiseImage(width, height, seed = 5)
 
-        val reference = GuidedFilter.filterGray(src, width, height, radius = 3, eps = EPS, bandHeight = height)
+        val reference = GuidedFilter.filterGray(frameOf(src, width, height), radius = 3, eps = EPS, bandHeight = height).toArgb()
         for (band in 1..height) {
-            val actual = GuidedFilter.filterGray(src, width, height, radius = 3, eps = EPS, bandHeight = band)
+            val actual = GuidedFilter.filterGray(frameOf(src, width, height), radius = 3, eps = EPS, bandHeight = band).toArgb()
             assertContentEquals(reference, actual, "bandHeight=$band diverged")
         }
     }
@@ -55,8 +55,8 @@ class GuidedFilterTest {
         val height = 20
         val src = IntArray(width * height) { argb(255, 90, 140, 30) }
 
-        assertContentEquals(src, GuidedFilter.filterGray(src, width, height, 4, EPS))
-        assertContentEquals(src, GuidedFilter.filterColor(src, width, height, 4, EPS))
+        assertContentEquals(src, GuidedFilter.filterGray(frameOf(src, width, height), 4, EPS).toArgb())
+        assertContentEquals(src, GuidedFilter.filterColor(frameOf(src, width, height), 4, EPS).toArgb())
     }
 
     /**
@@ -70,7 +70,7 @@ class GuidedFilterTest {
         val radius = 3
         val src = noiseImage(width, height, seed = 3)
 
-        val actual = GuidedFilter.filterGray(src, width, height, radius, eps = 1e9)
+        val actual = GuidedFilter.filterGray(frameOf(src, width, height), radius, eps = 1e9).toArgb()
         val expected = twiceBoxFiltered(src, width, height, radius)
 
         assertChannelsWithin(expected, actual, tolerance = 1)
@@ -83,7 +83,7 @@ class GuidedFilterTest {
         val height = 18
         val src = noiseImage(width, height, seed = 4)
 
-        val actual = GuidedFilter.filterGray(src, width, height, radius = 2, eps = 1e-3)
+        val actual = GuidedFilter.filterGray(frameOf(src, width, height), radius = 2, eps = 1e-8).toArgb()
 
         assertChannelsWithin(src, actual, tolerance = 3)
     }
@@ -101,7 +101,7 @@ class GuidedFilterTest {
             argb(255, v, v, v)
         }
 
-        val guided = GuidedFilter.filterGray(src, width, height, radius, eps = 100.0)
+        val guided = GuidedFilter.filterGray(frameOf(src, width, height), radius, eps = 1.5e-3).toArgb()
         val blurred = twiceBoxFiltered(src, width, height, radius)
 
         val row = height / 2
@@ -129,8 +129,8 @@ class GuidedFilterTest {
 
         val noisyPsnr = calculateQualityMetrics(clean, noisy).psnr
         for (denoised in listOf(
-            GuidedFilter.filterGray(noisy, width, height, radius = 4, eps = 900.0),
-            GuidedFilter.filterColor(noisy, width, height, radius = 4, eps = 900.0),
+            GuidedFilter.filterGray(frameOf(noisy, width, height), radius = 4, eps = 0.0138).toArgb(),
+            GuidedFilter.filterColor(frameOf(noisy, width, height), radius = 4, eps = 0.0138).toArgb(),
         )) {
             val psnr = calculateQualityMetrics(clean, denoised).psnr
             assertTrue(psnr > noisyPsnr, "denoising did not improve PSNR: $noisyPsnr -> $psnr")
@@ -150,14 +150,14 @@ class GuidedFilterTest {
         val random = Random(21)
         val src = IntArray(width * height) { argb(255, random.nextInt(256), 120, 60) }
 
-        val scalar = GuidedFilter.filterGray(src, width, height, radius = 3, eps = EPS)
-        val color = GuidedFilter.filterColor(src, width, height, radius = 3, eps = EPS)
+        val scalar = GuidedFilter.filterGray(frameOf(src, width, height), radius = 3, eps = EPS).toArgb()
+        val color = GuidedFilter.filterColor(frameOf(src, width, height), radius = 3, eps = EPS).toArgb()
 
         assertChannelsWithin(scalar, color, tolerance = 1)
     }
 
     @Test
-    fun preservesAlphaAndDimensions() {
+    fun outputIsOpaqueAndKeepsDimensions() {
         val width = 15
         val height = 9
         val random = Random(8)
@@ -165,9 +165,7 @@ class GuidedFilterTest {
             argb(random.nextInt(256), random.nextInt(256), random.nextInt(256), random.nextInt(256))
         }
         val input = AlgorithmInput(
-            frames = listOf(src),
-            width = width,
-            height = height,
+            frames = listOf(frameOf(src, width, height)),
             exposureTimes = listOf(10_000_000L),
             isoValues = listOf(100),
             captureTimeMs = 0L,
@@ -179,9 +177,9 @@ class GuidedFilterTest {
         )) {
             assertEquals(width, output.width)
             assertEquals(height, output.height)
-            assertEquals(width * height, output.pixels.size)
-            for (i in src.indices) {
-                assertEquals(src[i] ushr 24, output.pixels[i] ushr 24, "alpha changed at index $i")
+            assertEquals(width * height, output.frame.size)
+            for (pixel in output.frame.toArgb()) {
+                assertEquals(0xFF, pixel ushr 24, "Frame carries no alpha, so output must be opaque")
             }
         }
     }
@@ -190,10 +188,10 @@ class GuidedFilterTest {
     fun rejectsDegenerateParameters() {
         val src = IntArray(16) { argb(255, 10, 10, 10) }
 
-        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterGray(src, 4, 4, radius = 0, eps = 1.0) }
-        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterGray(src, 4, 4, radius = 2, eps = 0.0) }
-        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterColor(src, 4, 4, radius = 2, eps = -1.0) }
-        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterGray(src, 5, 4, radius = 2, eps = 1.0) }
+        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterGray(frameOf(src, 4, 4), radius = 0, eps = 1.0).toArgb() }
+        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterGray(frameOf(src, 4, 4), radius = 2, eps = 0.0).toArgb() }
+        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterColor(frameOf(src, 4, 4), radius = 2, eps = -1.0).toArgb() }
+        assertFailsWith<IllegalArgumentException> { GuidedFilter.filterGray(frameOf(src, 5, 4), radius = 2, eps = 1.0).toArgb() }
 
         assertFailsWith<IllegalArgumentException> { GuidedFilterDenoise(radius = 0) }
         assertFailsWith<IllegalArgumentException> { GuidedFilterDenoise(eps = 0.0) }
@@ -218,7 +216,7 @@ class GuidedFilterTest {
     }
 
     private companion object {
-        /** 0.1^2 in the paper's normalized units, carried to the 8-bit scale. */
-        const val EPS = 0.01 * 255.0 * 255.0
+        /** 0.1^2, in the paper's normalized units, which is what the filter now takes. */
+        const val EPS = 0.01
     }
 }
