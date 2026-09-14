@@ -52,6 +52,7 @@ import com.kbbench.app.viewmodel.BenchmarkResult
 import com.kbbench.app.viewmodel.CameraViewModel
 import com.kbbench.app.ui.components.PreprocessingSettingsDialog
 import com.kbbench.app.ui.components.AlgorithmSelectorDialog
+import com.kbbench.app.ui.components.HelpButton
 import com.kbbench.app.ui.components.HistogramOverlay
 import com.kbbench.app.ui.components.HistogramToolbar
 import com.kbbench.utils.RgbHistogram
@@ -349,6 +350,11 @@ fun ResultScreen(viewModel: CameraViewModel) {
             onParameterCommit = viewModel::commitAlgorithmParameters,
             onResetParameters = viewModel::resetAlgorithmParameters,
             confirmLabel = "Re-run",
+            helpTitle = "Re-run algorithms",
+            helpSections = listOf(
+                "Choose algorithms" to "Re-run algorithms on the previously processed input image(s). Select algorithms by checking the corresponding checkboxes.",
+                "Adjust parameters" to "You can adjust algorithm parameters by pressing on them. Your changes are saved for future sessions.",
+            ),
             onConfirm = {
                 showAlgorithmSelector = false
                 selectedIndex = null
@@ -680,8 +686,20 @@ fun ResultGridView(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                HelpButton(
+                    title = "Benchmark results",
+                    sections = listOf(
+                        "" to "This view presents the results of the benchmark run. Input shows the prepared images used for the run and your reference image, if loaded. Results shows each algorithm's output.",
+                        "Inspect and compare" to "Tap a tile to open it full screen. Pinch or double-tap to zoom, and swipe between images when zoomed out. Use Select for comparison, choose two images, then tap Compare to view them together. The histogram button toggles the colour distribution overlay.",
+                        "Calculate quality metrics" to "Tap the upload button beside the reference image prompt, then choose a reference showing the same scene and framing. Quality metrics of algorithm outputs will be computed against the reference image. Press the table button in the top bar to view a compact table view of the results.",
+                        "Retry with adjustments" to "Use the algorithm and preprocessing settings buttons in the top bar to adjust the respective settings. The algorithms will be rerun on the same prepared inputs and reference image.",
+                        "Export benchmark results" to "You can export the benchmark results, including all image files and a JSON report with the run's settings and metrics. Tap the share button in the top bar, then Export and choose a destination in the sharing menu.",
+                    ),
+                )
+                Spacer(Modifier.weight(1f))
                 if (isSelectingForCompare) {
                     OutlinedButton(
                         onClick = onCancelCompare,

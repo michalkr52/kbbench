@@ -38,6 +38,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kbbench.app.ui.components.AlgorithmSelectorDialog
 import com.kbbench.app.ui.components.PreprocessingSettingsDialog
 import com.kbbench.app.ui.components.CameraPreview
+import com.kbbench.app.ui.components.HelpButton
 import com.kbbench.app.ui.components.RuleOfThirdsOverlay
 import com.kbbench.app.ui.components.RuleOfThirdsToolbar
 import com.kbbench.app.viewmodel.AppScreen
@@ -180,13 +181,34 @@ fun CameraScreen(viewModel: CameraViewModel) {
                         RuleOfThirdsOverlay(modifier = Modifier.matchParentSize())
                     }
 
-                    RuleOfThirdsToolbar(
-                        showGrid = showRuleOfThirds,
-                        onToggleGrid = { viewModel.setShowRuleOfThirds(!showRuleOfThirds) },
+                    Row(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                    )
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        RuleOfThirdsToolbar(
+                            showGrid = showRuleOfThirds,
+                            onToggleGrid = { viewModel.setShowRuleOfThirds(!showRuleOfThirds) },
+                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                            tonalElevation = 3.dp,
+                            shape = MaterialTheme.shapes.small,
+                        ) {
+                            HelpButton(
+                                title = "Benchmark algorithms",
+                                sections = listOf(
+                                    "" to "This application allows you to benchmark computational photography algorithms on your device. Begin by configuring processing settings, then capture or load images to run the benchmarks.",
+                                    "Preprocessing settings" to "Configure how images are processed before running the algorithms. This includes steps like demosaicing, white balance, and other image adjustments.",
+                                    "Algorithm configuration" to "Select and configure the algorithms you want to run on the captured or loaded images. Adjust parameters as needed for each algorithm.",
+                                    "Capture or load image(s)" to "Capture the image by tapping the capture button, or load existing image(s) by pressing the button beside it. Configure the processing settings beforehand.",
+                                    "Capture format" to "RAW capture format allows bypassing the system image processing, which makes it the preferred choice for benchmarking algorithms accurately. In order to achieve consistent results, the application uses its own configurable preprocessing pipeline. If RAW format is not supported, you can fallback to JPEG using the camera's processing pipeline.",
+                                    "Camera controls" to "Tap the screen to adjust focus. Press the grid icon to show composition guides.",
+                                ),
+                            )
+                        }
+                    }
 
                     // Focus indicator
                     val focusPos = focusTapPosition

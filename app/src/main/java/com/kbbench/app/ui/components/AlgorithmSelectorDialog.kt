@@ -62,6 +62,8 @@ fun AlgorithmSelectorDialog(
     confirmLabel: String,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    helpTitle: String = "Algorithm parameters",
+    helpSections: List<Pair<String, String>> = defaultAlgorithmHelpSections(),
 ) {
     val allEnabled = algorithms.isNotEmpty() &&
         algorithms.all { it.name in enabledAlgorithmNames }
@@ -73,7 +75,15 @@ fun AlgorithmSelectorDialog(
             .fillMaxWidth(0.92f)
             .fillMaxHeight(0.9f),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        title = { Text("Algorithms") },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Algorithms", modifier = Modifier.weight(1f))
+                HelpButton(
+                    title = helpTitle,
+                    sections = helpSections,
+                )
+            }
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -131,6 +141,11 @@ fun AlgorithmSelectorDialog(
         }
     )
 }
+
+private fun defaultAlgorithmHelpSections(): List<Pair<String, String>> = listOf(
+    "Choose algorithms" to "Select the algorithms you want to run by checking the corresponding checkboxes. They will run sequentially, in order to get an accurate runtime measurement.",
+    "Adjust parameters" to "You can adjust algorithm parameters by pressing on them. Your changes are saved for future sessions.",
+)
 
 @Composable
 private fun AlgorithmRow(

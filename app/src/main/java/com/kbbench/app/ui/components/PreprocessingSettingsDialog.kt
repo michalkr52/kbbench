@@ -66,6 +66,12 @@ fun PreprocessingSettingsDialog(
                         Icon(Icons.Default.RestartAlt, contentDescription = "Reset preprocessing")
                     }
                 }
+                HelpButton(
+                    title = "Preprocessing settings",
+                    sections = listOf(
+                        "" to "Preprocessing prepares captured or loaded images before the selected algorithms run. You can configure this pipeline to change how the input images are prepared. Algorithms may have specific requirements for the input images, which are displayed accordingly. Some controls apply only to RAW images",
+                    ),
+                )
             }
         },
         text = {
