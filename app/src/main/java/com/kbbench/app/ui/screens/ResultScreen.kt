@@ -74,7 +74,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var showHistograms by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var exportAsZip by remember { mutableStateOf(false) }
-    var includePreviewImages by remember { mutableStateOf(true) }
+    var includePngImages by remember { mutableStateOf(true) }
     var showMetricsTable by remember { mutableStateOf(false) }
     var showAlgorithmSelector by remember { mutableStateOf(false) }
     var showPreprocessing by remember { mutableStateOf(false) }
@@ -193,7 +193,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         }
                         IconButton(onClick = {
                             exportAsZip = false
-                            includePreviewImages = true
+                            includePngImages = true
                             showExportDialog = true
                         }) {
                             Icon(Icons.Default.Share, contentDescription = "Export")
@@ -312,9 +312,37 @@ fun ResultScreen(viewModel: CameraViewModel) {
     if (showExportDialog) {
         AlertDialog(
             onDismissRequest = { showExportDialog = false },
-            title = { Text("Export benchmark results") },
+            title = { Text("Export results") },
             text = {
                 Column {
+                    Text(
+                        text = "Image formats",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = true,
+                            onCheckedChange = null,
+                            enabled = false,
+                            modifier = Modifier.size(48.dp),
+                        )
+                        Text("Exact frame files (.kbframe)")
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = includePngImages,
+                            onCheckedChange = { includePngImages = it },
+                            modifier = Modifier.size(48.dp),
+                        )
+                        Text("8-bit PNG files (.png)")
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -325,22 +353,12 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         )
                         Text("Pack results into ZIP")
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = includePreviewImages,
-                            onCheckedChange = { includePreviewImages = it }
-                        )
-                        Text("Include preview images")
-                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     showExportDialog = false
-                    viewModel.exportResults(context, exportAsZip, includePreviewImages)
+                    viewModel.exportResults(context, exportAsZip, includePngImages)
                 }) {
                     Text("Export")
                 }

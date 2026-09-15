@@ -197,7 +197,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             shape = MaterialTheme.shapes.small,
                         ) {
                             HelpButton(
-                                title = "Benchmark algorithms",
+                                title = "Usage instructions",
                                 sections = listOf(
                                     "" to "This application allows you to benchmark computational photography algorithms on your device. Begin by configuring processing settings, then capture or load images to run the benchmarks.",
                                     "Preprocessing settings" to "Configure how images are processed before running the algorithms. This includes steps like demosaicing, white balance, and other image adjustments.",

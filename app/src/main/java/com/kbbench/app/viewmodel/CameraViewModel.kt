@@ -425,7 +425,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (hasPurgedOrphanedFiles) return
         hasPurgedOrphanedFiles = true
         viewModelScope.launch(Dispatchers.IO) {
-            val prefixes = listOf("IMG_", "REF_", "PREPROCESSED_", "OUT_", "PREVIEW_")
+            val prefixes = listOf("IMG_", "REF_", "PREPROCESSED_", "OUT_", "PNG_", "PREVIEW_")
             val orphaned = context.filesDir.listFiles { file ->
                 prefixes.any { file.name.startsWith(it) }
             } ?: return@launch
@@ -1370,17 +1370,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         histogramGeneration++
         histogramJob?.cancelAndJoin()
         val curve = captureMetadata.preprocessing.config.transferCurve
-        val needsPreview = curve.encoding != TransferEncoding.SRGB
         val previewTransfer = ArgbTransfer.toSrgb(curve)
         val persistedSources = sourceFiles.ifEmpty { listOf(originalFile) }
-        fun previewFile(canonical: File): File = when {
-            canonical.extension == "kbframe" -> File(
-                canonical.parentFile,
-                "PREVIEW_${canonical.nameWithoutExtension}.png",
-            )
-            needsPreview -> File(canonical.parentFile, "PREVIEW_${canonical.name}")
-            else -> canonical
-        }
+        fun pngFile(canonical: File): File = File(
+            canonical.parentFile,
+            "PNG_${canonical.nameWithoutExtension}.png",
+        )
         logMemory("benchmark start")
 
         // A re-run points at the exact frame artifacts the first run already wrote. The PNGs next
@@ -1399,12 +1394,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     sourceDepth = frames[index].sourceDepth,
                 )
             )
-            val displayFile = previewFile(preprocessedFile)
+            val displayFile = pngFile(preprocessedFile)
             if (displayFile != preprocessedFile) {
                 artifacts.add(ExportImageArtifact(
-                    id = "image_preprocessed_preview_$index",
+                    id = "image_preprocessed_png_$index",
                     path = displayFile.absolutePath,
-                    role = "display_preview",
+                    role = "display_png",
                     width = width,
                     height = height,
                     frameIndex = index,
@@ -1434,7 +1429,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         title = "Pre-processed Input",
                         subtitle = captureMetadata.preprocessing.config.summary() +
                             if (captureMetadata.preprocessing.isRaw) " / RAW" else " / Rendered",
-                        imagePath = previewFile(preprocessedFile).absolutePath,
+                        imagePath = pngFile(preprocessedFile).absolutePath,
                         canonicalImagePath = preprocessedFile.absolutePath,
                         preprocessedFrameIndex = index,
                         preprocessedFrameCount = preprocessedFiles.size,
@@ -1520,12 +1515,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         height = output.height,
                     )
                 )
-                val displayFile = previewFile(outFile)
+                val displayFile = pngFile(outFile)
                 if (displayFile != outFile) {
                     artifacts.add(ExportImageArtifact(
-                        id = "image_output_preview_$id",
+                        id = "image_output_png_$id",
                         path = displayFile.absolutePath,
-                        role = "display_preview",
+                        role = "display_png",
                         width = output.width,
                         height = output.height,
                         canonicalImageId = "image_output_$id",
@@ -1563,19 +1558,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        logMemory("before artifact saves (${preprocessedFiles.size} inputs, ${pendingOutputSaves.size} output previews)")
+        logMemory("before artifact saves (${preprocessedFiles.size} inputs, ${pendingOutputSaves.size} PNG renditions)")
         if (reusePreprocessedPaths == null) {
             preprocessedFiles.forEachIndexed { index, preprocessedFile ->
                 saveJobs += async(Dispatchers.Default) {
                     logTimed("save frame artifact preprocessed[$index] (${width}x$height)") {
                         FrameArtifact.save(preprocessedFile, frames[index])
-                        saveFramePreview(previewFile(preprocessedFile), frames[index], previewTransfer)
+                        saveFramePreview(pngFile(preprocessedFile), frames[index], previewTransfer)
                     }
                 }
             }
         } else {
             preprocessedFiles.forEachIndexed { index, preprocessedFile ->
-                val displayFile = previewFile(preprocessedFile)
+                val displayFile = pngFile(preprocessedFile)
                 if (!displayFile.isFile) {
                     saveJobs += async(Dispatchers.Default) {
                         logTimed("restore frame preview[$index] (${width}x$height)") {
@@ -1588,8 +1583,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         pendingOutputSaves.forEach { (algoName, outFile, bitmap) ->
             saveJobs += async(Dispatchers.Default) {
                 try {
-                    val displayFile = previewFile(outFile)
-                    logTimed("PNG save output preview($algoName) (${bitmap.width}x${bitmap.height})") {
+                    val displayFile = pngFile(outFile)
+                    logTimed("PNG save output rendition($algoName) (${bitmap.width}x${bitmap.height})") {
                         ArgbPng.saveDisplay(displayFile, bitmap, previewTransfer)
                     }
                 } finally {
@@ -1715,7 +1710,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             .filter {
                 it.role == "preprocessed_input" ||
                     it.role == "algorithm_output" ||
-                    it.role == "display_preview"
+                    it.role == "display_png"
             }
             .map { it.path }
         _isProcessing.value = true
@@ -2153,13 +2148,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun exportResults(
         context: Context,
         exportAsZip: Boolean = false,
-        includePreviewImages: Boolean = true,
+        includePngImages: Boolean = true,
     ) {
         val results = _benchmarkResults.value
         if (results.isEmpty()) return
         val artifacts = exportImageArtifacts
             .distinctBy { it.path }
-            .filter { includePreviewImages || it.role != "display_preview" }
+            .filter { includePngImages || it.role != "display_png" }
             .filter { File(it.path).exists() }
         val captureSnapshot = captureMetadata
         val outputSnapshot = lastAlgorithmOutputs
