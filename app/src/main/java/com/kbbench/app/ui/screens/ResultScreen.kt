@@ -74,6 +74,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var showHistograms by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var exportAsZip by remember { mutableStateOf(false) }
+    var includePreviewImages by remember { mutableStateOf(true) }
     var showMetricsTable by remember { mutableStateOf(false) }
     var showAlgorithmSelector by remember { mutableStateOf(false) }
     var showPreprocessing by remember { mutableStateOf(false) }
@@ -192,6 +193,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         }
                         IconButton(onClick = {
                             exportAsZip = false
+                            includePreviewImages = true
                             showExportDialog = true
                         }) {
                             Icon(Icons.Default.Share, contentDescription = "Export")
@@ -312,21 +314,33 @@ fun ResultScreen(viewModel: CameraViewModel) {
             onDismissRequest = { showExportDialog = false },
             title = { Text("Export benchmark results") },
             text = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = exportAsZip,
-                        onCheckedChange = { exportAsZip = it }
-                    )
-                    Text("Pack results into ZIP")
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = exportAsZip,
+                            onCheckedChange = { exportAsZip = it }
+                        )
+                        Text("Pack results into ZIP")
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = includePreviewImages,
+                            onCheckedChange = { includePreviewImages = it }
+                        )
+                        Text("Include preview images")
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     showExportDialog = false
-                    viewModel.exportResults(context, exportAsZip)
+                    viewModel.exportResults(context, exportAsZip, includePreviewImages)
                 }) {
                     Text("Export")
                 }

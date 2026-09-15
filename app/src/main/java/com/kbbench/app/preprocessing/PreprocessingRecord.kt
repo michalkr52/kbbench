@@ -13,7 +13,7 @@ fun PreprocessingConfig.summary(): String {
         TransferEncoding.LINEAR -> "Linear"
         TransferEncoding.LOG -> "Log ${"%.1f".format(Locale.US, transferCurve.logStrength)}"
     }
-    return "$curve / ${"%+.2f".format(Locale.US, exposureOffsetEv)} EV / 8-bit"
+    return "$curve / ${"%+.2f".format(Locale.US, exposureOffsetEv)} EV / planar U16"
 }
 
 enum class PreprocessingSource {
@@ -46,13 +46,21 @@ data class PreprocessingRecord(
                 .put("applied_gain_maps", settings.appliedGainMapCount))
         }
         return JSONObject()
-            .put("pixel_format", "ARGB_8888")
-            .put("channel_order", "ARGB")
+            .put("pixel_format", "planar_uint16")
+            .put("channel_order", "RGB_PLANAR")
+            .put("sample_range", JSONArray(listOf(0, 65535)))
+            .put("algorithm_frame_format", "planar_uint16")
+            .put("algorithm_frame_artifact_format", FrameArtifact.FORMAT)
+            .put("algorithm_frame_artifact_version", FrameArtifact.VERSION)
+            .put("algorithm_frame_sample_range", JSONArray(listOf(0, 65535)))
+            .put("algorithm_frame_source_depth_reporting", true)
+            .put("display_pixel_format", "ARGB_8888")
+            .put("display_sample_range", JSONArray(listOf(0, 255)))
+            .put("canonical_artifact_note", "KBFRAME artifacts are exact algorithm inputs and outputs; ARGB_8888 PNGs are display renditions")
             .put("profile", PreprocessingProfileJson.encode(config))
             .put("source", source.name.lowercase(Locale.ROOT))
             .put("signal_origin", if (isRaw) "sensor_derived" else "rendered_derived")
             .put("primaries", if (isRaw && colorMatrix == null) "uncalibrated_camera_rgb" else "srgb")
-            .put("sample_range", JSONArray(listOf(0, 255)))
             .put("raw_controls_available", isRaw)
             .put("effective_raw_frames", frames)
             .put("color_matrix", colorMatrix?.let { JSONArray(it) } ?: JSONObject.NULL)
