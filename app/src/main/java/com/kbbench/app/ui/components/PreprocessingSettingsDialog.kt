@@ -42,16 +42,20 @@ import com.kbbench.algorithm.preprocessing.TransferCurve
 import com.kbbench.algorithm.preprocessing.TransferEncoding
 import com.kbbench.algorithm.preprocessing.WhiteBalanceGains
 import com.kbbench.algorithm.preprocessing.WhiteBalanceMode
+import com.kbbench.app.preprocessing.DenoiserChoice
+import com.kbbench.app.preprocessing.DenoiserConfig
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreprocessingSettingsDialog(
     initial: PreprocessingConfig,
-    onConfirm: (PreprocessingConfig) -> Unit,
+    initialDenoiser: DenoiserConfig,
+    onConfirm: (PreprocessingConfig, DenoiserConfig) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var config by remember(initial) { mutableStateOf(initial) }
+    var denoiser by remember(initialDenoiser) { mutableStateOf(initialDenoiser) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -62,14 +66,17 @@ fun PreprocessingSettingsDialog(
                     tooltip = { PlainTooltip { Text("Reset preprocessing") } },
                     state = rememberTooltipState(),
                 ) {
-                    IconButton(onClick = { config = PreprocessingConfig() }) {
+                    IconButton(onClick = {
+                        config = PreprocessingConfig()
+                        denoiser = DenoiserConfig()
+                    }) {
                         Icon(Icons.Default.RestartAlt, contentDescription = "Reset preprocessing")
                     }
                 }
                 HelpButton(
                     title = "Preprocessing settings",
                     sections = listOf(
-                        "" to "Preprocessing prepares captured or loaded images before the selected algorithms run. You can configure this pipeline to change how the input images are prepared. Algorithms may have specific requirements for the input images, which are displayed accordingly. Some controls apply only to RAW images",
+                        "" to "Preprocessing prepares captured or loaded images before the selected algorithms run. Some controls apply only to RAW images.",
                     ),
                 )
             }
@@ -128,9 +135,28 @@ fun PreprocessingSettingsDialog(
                 ProfileChoice("Highlights", config.highlights, listOf(
                     HighlightMode.NEUTRALIZE_CLIPPED to "Neutralize clipped", HighlightMode.CLIP_CHANNELS to "Clip channels",
                 )) { config = config.copy(highlights = it) }
+                Text(
+                    "Denoiser",
+                    modifier = Modifier.padding(top = 12.dp),
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                )
+                ProfileChoice("Mode", denoiser.choice, listOf(
+                    DenoiserChoice.OFF to "Current path",
+                    DenoiserChoice.GUIDED_FILTER to "Guided Filter",
+                    DenoiserChoice.GUIDED_FILTER_COLOR to "Guided Filter Color",
+                )) { denoiser = denoiser.copy(choice = it) }
+                if (denoiser.isEnabled) {
+                    Text("Fixed boundary: before final clipping", style = MaterialTheme.typography.bodySmall)
+                    ProfileNumber("Denoiser radius", denoiser.radius.toDouble(), 1f..32f, 30) {
+                        denoiser = denoiser.copy(radius = it.toInt())
+                    }
+                    ProfileNumber("Denoiser epsilon", denoiser.eps, 0.001f..0.25f, 249) {
+                        denoiser = denoiser.copy(eps = it)
+                    }
+                }
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(config) }) { Text("Apply") } },
+        confirmButton = { TextButton(onClick = { onConfirm(config, denoiser) }) { Text("Apply") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

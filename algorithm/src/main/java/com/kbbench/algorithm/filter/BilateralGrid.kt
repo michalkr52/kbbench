@@ -248,13 +248,13 @@ object BilateralGrid {
                 val weight = interpolate(weights, fy, fx, fz, gridRows, gridWidth, gridDepth)
                 if (weight <= WEIGHT_FLOOR) {
                     // No sample landed nearby; the input is the only defensible answer.
-                    out.red[i] = src.red[i]
-                    out.green[i] = src.green[i]
-                    out.blue[i] = src.blue[i]
+                    out.setSample(0, i, src.r(i))
+                    out.setSample(1, i, src.g(i))
+                    out.setSample(2, i, src.b(i))
                 } else {
-                    out.red[i] = resolved(weightedR, fy, fx, fz, gridRows, gridWidth, gridDepth, weight)
-                    out.green[i] = resolved(weightedG, fy, fx, fz, gridRows, gridWidth, gridDepth, weight)
-                    out.blue[i] = resolved(weightedB, fy, fx, fz, gridRows, gridWidth, gridDepth, weight)
+                    out.setSample(0, i, resolved(weightedR, fy, fx, fz, gridRows, gridWidth, gridDepth, weight))
+                    out.setSample(1, i, resolved(weightedG, fy, fx, fz, gridRows, gridWidth, gridDepth, weight))
+                    out.setSample(2, i, resolved(weightedB, fy, fx, fz, gridRows, gridWidth, gridDepth, weight))
                 }
             }
         }
@@ -270,9 +270,7 @@ object BilateralGrid {
         gridWidth: Int,
         gridDepth: Int,
         weight: Double,
-    ): Short = Frame.store(
-        (interpolate(grid, fy, fx, fz, gridRows, gridWidth, gridDepth) / weight).toFloat()
-    )
+    ): Float = (interpolate(grid, fy, fx, fz, gridRows, gridWidth, gridDepth) / weight).toFloat()
 
     /**
      * @return [grid] sampled trilinearly at `(fy, fx, fz)` in cell units. Corners outside the grid

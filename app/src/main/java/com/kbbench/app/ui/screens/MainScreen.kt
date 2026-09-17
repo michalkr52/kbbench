@@ -85,6 +85,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val algorithmParameters by viewModel.algorithmParameters.collectAsState()
     val showRuleOfThirds by viewModel.showRuleOfThirds.collectAsState()
     val preprocessingConfig by viewModel.preprocessingConfig.collectAsState()
+    val denoiserConfig by viewModel.denoiserConfig.collectAsState()
     var showPreprocessing by remember { mutableStateOf(false) }
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
@@ -411,7 +412,12 @@ fun CameraScreen(viewModel: CameraViewModel) {
     if (showPreprocessing) {
         PreprocessingSettingsDialog(
             initial = preprocessingConfig,
-            onConfirm = { viewModel.setPreprocessingConfig(it); showPreprocessing = false },
+            initialDenoiser = denoiserConfig,
+            onConfirm = { config, denoiser ->
+                viewModel.setPreprocessingConfig(config)
+                viewModel.setDenoiserConfig(denoiser)
+                showPreprocessing = false
+            },
             onDismiss = { showPreprocessing = false },
         )
     }

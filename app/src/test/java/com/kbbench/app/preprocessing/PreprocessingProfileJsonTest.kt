@@ -17,6 +17,17 @@ import org.junit.Test
 
 class PreprocessingProfileJsonTest {
     @Test
+    fun denoiserSettingsRoundTripWithoutVersioning() {
+        val config = DenoiserConfig(
+            choice = DenoiserChoice.GUIDED_FILTER_COLOR,
+            radius = 13,
+            eps = 0.075,
+        )
+
+        assertEquals(config, DenoiserConfigJson.decode(DenoiserConfigJson.encode(config)))
+    }
+
+    @Test
     fun everyCurveRoundTripsWithExplicitDefaultsAndManualValues() {
         for (encoding in TransferEncoding.entries) {
             val profile = PreprocessingConfig(

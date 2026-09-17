@@ -65,13 +65,13 @@ class ExposureFusion : ImageAlgorithm {
                 }
 
                 if (sumW > 0.0) {
-                    out.red[i] = Frame.store((sumR / sumW).toFloat())
-                    out.green[i] = Frame.store((sumG / sumW).toFloat())
-                    out.blue[i] = Frame.store((sumB / sumW).toFloat())
+                    out.setSample(0, i, (sumR / sumW).toFloat())
+                    out.setSample(1, i, (sumG / sumW).toFloat())
+                    out.setSample(2, i, (sumB / sumW).toFloat())
                 } else {
-                    out.red[i] = frames[0].red[i]
-                    out.green[i] = frames[0].green[i]
-                    out.blue[i] = frames[0].blue[i]
+                    out.setSample(0, i, frames[0].r(i))
+                    out.setSample(1, i, frames[0].g(i))
+                    out.setSample(2, i, frames[0].b(i))
                 }
             }
         }

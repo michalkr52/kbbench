@@ -54,6 +54,7 @@ object RawPreprocessor {
         shadingMap: ShadingMap? = null,
         gainMaps: List<GainMap> = emptyList(),
         config: PreprocessingConfig = PreprocessingConfig(),
+        unclippedBoundary: Boolean = false,
     ): RawPreprocessingResult {
         require(width > 0 && height > 0 && width.toLong() * height <= Int.MAX_VALUE) {
             "Invalid RAW dimensions"
@@ -111,6 +112,7 @@ object RawPreprocessor {
             colorMatrix = colorMatrix,
             config = config,
             sourceDepth = 32 - Integer.numberOfLeadingZeros(whiteLevel),
+            unclippedBoundary = unclippedBoundary,
         )
         return RawPreprocessingResult(
             frame, width, height,

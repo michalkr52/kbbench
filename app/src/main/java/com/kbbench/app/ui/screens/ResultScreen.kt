@@ -82,6 +82,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
     val algorithmParameters by viewModel.algorithmParameters.collectAsState()
     val preprocessingConfig by viewModel.preprocessingConfig.collectAsState()
+    val denoiserConfig by viewModel.denoiserConfig.collectAsState()
     val canRerun by viewModel.canRerun.collectAsState()
     val canReprocessFromSource by viewModel.canReprocessFromSource.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
@@ -399,12 +400,19 @@ fun ResultScreen(viewModel: CameraViewModel) {
     if (showPreprocessing) {
         PreprocessingSettingsDialog(
             initial = preprocessingConfig,
-            onConfirm = { config ->
+            initialDenoiser = denoiserConfig,
+            onConfirm = { config, denoiser ->
+                val preprocessingChanged = config != preprocessingConfig
+                val denoiserChanged = denoiser != denoiserConfig
                 viewModel.setPreprocessingConfig(config)
+                viewModel.setDenoiserConfig(denoiser)
                 showPreprocessing = false
                 selectedIndex = null
                 compareIndices = null
-                viewModel.reprocessFromSource(context)
+                when {
+                    preprocessingChanged -> viewModel.reprocessFromSource(context)
+                    denoiserChanged -> viewModel.rerunDenoiser(context)
+                }
             },
             onDismiss = { showPreprocessing = false },
         )
@@ -911,8 +919,9 @@ fun ResultFullscreenView(
         val currentResult = results[pagerState.currentPage]
         val displayMetrics = currentResult.metrics.toDisplayList()
         val inputFrameDescription = currentResult.inputFrameDescription()
+        val detailSubtitle = currentResult.fullscreenSubtitle ?: currentResult.subtitle
         val hasDetails = displayMetrics.isNotEmpty() ||
-            currentResult.subtitle != null ||
+            detailSubtitle != null ||
             inputFrameDescription != null
 
         if (hasDetails) {
@@ -925,7 +934,7 @@ fun ResultFullscreenView(
                         if (displayMetrics.isNotEmpty()) "Metrics" else "Preprocessing",
                         style = MaterialTheme.typography.titleMedium
                     )
-                    currentResult.subtitle?.let { subtitle ->
+                    detailSubtitle?.let { subtitle ->
                         Text(
                             text = subtitle,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),

@@ -1,6 +1,7 @@
 package com.kbbench.algorithm.preprocessing
 
 import com.kbbench.algorithm.base.Frame
+import com.kbbench.algorithm.base.FrameDomain
 
 /**
  * Bilinear Bayer demosaicing: converts a normalized RAW Bayer mosaic into a planar [Frame].
@@ -54,6 +55,7 @@ object BayerDemosaic {
         colorMatrix: FloatArray? = null,
         config: PreprocessingConfig = PreprocessingConfig(),
         sourceDepth: Int = Frame.INTERNAL_DEPTH,
+        unclippedBoundary: Boolean = false,
     ): Frame {
         require(width > 0 && height > 0 && width.toLong() * height <= Int.MAX_VALUE) {
             "Invalid image dimensions"
@@ -77,9 +79,12 @@ object BayerDemosaic {
         val exposure = config.exposureMultiplier
         val curve = config.transferCurve
 
-        val red = ShortArray(width * height)
-        val green = ShortArray(width * height)
-        val blue = ShortArray(width * height)
+        val red = if (unclippedBoundary) null else ShortArray(width * height)
+        val green = if (unclippedBoundary) null else ShortArray(width * height)
+        val blue = if (unclippedBoundary) null else ShortArray(width * height)
+        val redFloat = if (unclippedBoundary) FloatArray(width * height) else null
+        val greenFloat = if (unclippedBoundary) FloatArray(width * height) else null
+        val blueFloat = if (unclippedBoundary) FloatArray(width * height) else null
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val px = x % 2
@@ -128,12 +133,37 @@ object BayerDemosaic {
                 }
 
                 val index = y * width + x
-                red[index] = Frame.store(curve.encode((lr * exposure).coerceIn(0f, 1f).toDouble()).toFloat())
-                green[index] = Frame.store(curve.encode((lg * exposure).coerceIn(0f, 1f).toDouble()).toFloat())
-                blue[index] = Frame.store(curve.encode((lb * exposure).coerceIn(0f, 1f).toDouble()).toFloat())
+                val exposedRed = lr * exposure
+                val exposedGreen = lg * exposure
+                val exposedBlue = lb * exposure
+                if (unclippedBoundary) {
+                    redFloat!![index] = exposedRed
+                    greenFloat!![index] = exposedGreen
+                    blueFloat!![index] = exposedBlue
+                } else {
+                    red!![index] = Frame.store(curve.encode(exposedRed.coerceIn(0f, 1f).toDouble()).toFloat())
+                    green!![index] = Frame.store(curve.encode(exposedGreen.coerceIn(0f, 1f).toDouble()).toFloat())
+                    blue!![index] = Frame.store(curve.encode(exposedBlue.coerceIn(0f, 1f).toDouble()).toFloat())
+                }
             }
         }
-        return Frame(red, green, blue, width, height, sourceDepth)
+        if (unclippedBoundary) {
+            return Frame.unclipped(
+                red = redFloat!!,
+                green = greenFloat!!,
+                blue = blueFloat!!,
+                width = width,
+                height = height,
+                sourceDepth = sourceDepth,
+                domain = FrameDomain.LINEAR,
+            )
+        }
+        val domain = when (curve.encoding) {
+            TransferEncoding.LINEAR -> FrameDomain.LINEAR
+            TransferEncoding.SRGB -> FrameDomain.SRGB
+            TransferEncoding.LOG -> FrameDomain.LOG
+        }
+        return Frame(red!!, green!!, blue!!, width, height, sourceDepth, domain)
     }
 
     private fun avgNeighbors4(raw: FloatArray, x: Int, y: Int, w: Int, h: Int): Float {

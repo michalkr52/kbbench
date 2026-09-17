@@ -29,6 +29,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kbbench.algorithm.base.*
 import com.kbbench.algorithm.impl.AlgorithmRegistry
+import com.kbbench.algorithm.base.DenoiserRunner
+import com.kbbench.algorithm.preprocessing.FrameMaterializer
 import com.kbbench.app.settings.BenchmarkSettingsStore
 import com.kbbench.algorithm.preprocessing.AppliedLensShading
 import com.kbbench.algorithm.preprocessing.ArgbTransfer
@@ -45,6 +47,7 @@ import com.kbbench.app.preprocessing.ShadingMapSnapshot
 import com.kbbench.app.preprocessing.summary
 import com.kbbench.app.preprocessing.ArgbPng
 import com.kbbench.app.preprocessing.FrameArtifact
+import com.kbbench.app.preprocessing.DenoiserConfig
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.DngImage
 import com.kbbench.algorithm.preprocessing.DngReader
@@ -119,6 +122,7 @@ data class BenchmarkResult(
     val id: String,
     val title: String,
     val subtitle: String? = null,
+    val fullscreenSubtitle: String? = null,
     val imagePath: String,
     val displayRotationDegrees: Int = 0,
     val preprocessedFrameIndex: Int? = null,
@@ -140,6 +144,18 @@ private data class AlgorithmOutputRecord(
     val parameters: Map<String, Double> = emptyMap(),
 )
 
+private data class DenoiserRunRecord(
+    val id: String,
+    val effectiveParameters: Map<String, Double>,
+    val runtimeMs: List<Long>,
+    val inputArtifactIds: List<String>,
+    val outputArtifactIds: List<String>,
+    val inputDomain: String,
+    val outputDomain: String,
+    val inputStorage: String,
+    val outputStorage: String,
+)
+
 private data class CaptureMetadata(
     val sourceFormat: String,
     val width: Int,
@@ -152,6 +168,7 @@ private data class CaptureMetadata(
     val cfaPattern: Int? = null,
     val whiteBalanceGains: List<Float>? = null,
     val preprocessing: PreprocessingRecord = PreprocessingRecord(),
+    val denoiser: DenoiserRunRecord? = null,
 )
 
 private data class ExportImageArtifact(
@@ -162,7 +179,17 @@ private data class ExportImageArtifact(
     val height: Int,
     val frameIndex: Int? = null,
     val sourceDepth: Int? = null,
+    val domain: String? = null,
+    val storage: String? = null,
     val canonicalImageId: String? = null,
+)
+
+private data class FixedBoundaryMetadata(
+    val width: Int,
+    val height: Int,
+    val sourceDepth: Int,
+    val domain: FrameDomain,
+    val storage: FrameStorage,
 )
 
 private data class PersistedPickedImage(
@@ -195,12 +222,14 @@ private data class LastRunInput(
     val originalDisplayRotation: Int,
     val sourceFilePaths: List<String> = listOf(originalFilePath),
     val preprocessedPaths: List<String>,
+    val fixedPipelinePaths: List<String> = emptyList(),
     val width: Int,
     val height: Int,
     val exposureTimes: List<Long>,
     val isoValues: List<Int>,
     val captureTimeMs: Long,
     val captureMetadata: CaptureMetadata,
+    val denoiserConfig: DenoiserConfig = DenoiserConfig(),
 )
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
@@ -209,6 +238,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _preprocessingConfig = MutableStateFlow(settingsStore.loadPreprocessingConfig())
     val preprocessingConfig = _preprocessingConfig.asStateFlow()
+    private val _denoiserConfig = MutableStateFlow(settingsStore.loadDenoiserConfig())
+    val denoiserConfig = _denoiserConfig.asStateFlow()
     private val _processingError = MutableStateFlow<String?>(null)
     val processingError = _processingError.asStateFlow()
     private val _dngFallbackRequested = MutableStateFlow(false)
@@ -219,6 +250,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (_isProcessing.value) return
         _preprocessingConfig.value = config
         settingsStore.savePreprocessingConfig(config)
+    }
+
+    fun setDenoiserConfig(config: DenoiserConfig) {
+        if (_isProcessing.value) return
+        _denoiserConfig.value = config
+        settingsStore.saveDenoiserConfig(config)
     }
 
     fun dismissProcessingError() { _processingError.value = null }
@@ -638,6 +675,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val chars = characteristics ?: manager.getCameraCharacteristics(id)
 
         val profile = _preprocessingConfig.value
+        val denoiserConfig = _denoiserConfig.value
         val algorithms = getEnabledAlgorithms()
         val parameters = _algorithmParameters.value
         _isProcessing.value = true
@@ -645,6 +683,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             var capturedImages = emptyList<CombinedResult>()
             val persistedSourceFiles = mutableListOf<File>()
+            var preparedFixedPipelinePaths = emptyList<File>()
+            var fixedPipelinePathsAdopted = false
             try {
                 val isRaw = _captureFormat.value == ImageFormat.RAW_SENSOR
                 val maxFramesNeeded = algorithms.maxOfOrNull { it.metadata.frameRequirements.minFrames } ?: 1
@@ -717,35 +757,104 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         ?.also { Log.d("CameraViewModel", "DefaultCrop ${it.width()}x${it.height()} at ${it.left},${it.top}") }
                 } else null
                 val resolvedFrames = mutableListOf<ResolvedRawPreprocessing>()
-                val decodedFrames = logTimed("decode frames x${capturedFrames.size}") {
-                    capturedFrames.map { frame ->
-                        val decoded = decodeToArgb(
-                            frame, whiteLevel, blackLevel, cfaPattern,
-                            wbGains, colorMatrix, shadingMap, profile,
-                        )
-                        decoded.rawSettings?.let { resolvedFrames.add(it) }
-                        val (frame, frameWidth, frameHeight) = decoded
-                        // Cropped inside the map so the full-size array is collectable right away.
-                        if (rawCrop != null) cropFrame(frame, rawCrop)
-                        else Triple(frame, frameWidth, frameHeight)
+                preparedFixedPipelinePaths = if (denoiserConfig.isEnabled) {
+                    capturedFrames.indices.map { index ->
+                        File(context.filesDir, "FIXED_PIPELINE_${SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())}_$index.kbframe")
                     }
+                } else {
+                    emptyList()
                 }
-
-                // Retain every source frame so a later profile reprocess can rebuild the complete
-                // bracket instead of pretending the first frame represents all inputs.
-                val sourceFiles = capturedFrames.mapIndexed { index, captured ->
-                    val dngThumbnail = if (isRaw) {
-                        decodedFrames[index].let { (frame, w, h) ->
-                            buildDngThumbnail(frame.toArgb(), w, h, profile.transferCurve)
+                val sourceFiles: List<File>
+                val sourceFrames: List<Frame>
+                val width: Int
+                val height: Int
+                if (denoiserConfig.isEnabled) {
+                    // Keep only one unclipped RAW frame live. The exact boundary is persisted before
+                    // moving to the next capture, then runBenchmarks reads it back one at a time.
+                    var processedWidth = 0
+                    var processedHeight = 0
+                    sourceFrames = emptyList()
+                    sourceFiles = capturedFrames.mapIndexed { index, captured ->
+                        val decoded = logTimed("decode frame[$index]") {
+                            decodeToArgb(
+                                captured, whiteLevel, blackLevel, cfaPattern,
+                                wbGains, colorMatrix, shadingMap, profile,
+                                unclippedBoundary = true,
+                            )
                         }
-                    } else null
-                    try {
-                        logTimed("saveResult source[$index]") {
-                            saveResult(context, captured, chars, rotation, dngThumbnail, index)
-                        }.also { persistedSourceFiles += it }
-                    } finally {
-                        dngThumbnail?.recycle()
+                        decoded.rawSettings?.let { resolvedFrames.add(it) }
+                        val (croppedFrame, croppedWidth, croppedHeight) = decoded.let { result ->
+                            if (rawCrop != null) cropFrame(result.frame, rawCrop)
+                            else Triple(result.frame, result.width, result.height)
+                        }
+                        val dngThumbnail = if (isRaw) {
+                            val displayFrame = FrameMaterializer.materialize(croppedFrame, profile.transferCurve)
+                            buildDngThumbnail(displayFrame.toArgb(), croppedWidth, croppedHeight, profile.transferCurve)
+                        } else null
+                        val sourceFile = try {
+                            logTimed("saveResult source[$index]") {
+                                saveResult(context, captured, chars, rotation, dngThumbnail, index)
+                            }.also { persistedSourceFiles += it }
+                        } finally {
+                            dngThumbnail?.recycle()
+                        }
+                        val (rotatedFrame, rotatedWidth, rotatedHeight) =
+                            rotateFrame(croppedFrame, croppedWidth, croppedHeight, rotation)
+                        if (index == 0) {
+                            processedWidth = rotatedWidth
+                            processedHeight = rotatedHeight
+                        } else {
+                            require(rotatedWidth == processedWidth && rotatedHeight == processedHeight) {
+                                "Captured frames have different processed dimensions"
+                            }
+                        }
+                        FrameArtifact.save(preparedFixedPipelinePaths[index], rotatedFrame)
+                        sourceFile
                     }
+                    width = processedWidth
+                    height = processedHeight
+                } else {
+                    var decodedFrames = logTimed("decode frames x${capturedFrames.size}") {
+                        capturedFrames.map { frame ->
+                            val decoded = decodeToArgb(
+                                frame, whiteLevel, blackLevel, cfaPattern,
+                                wbGains, colorMatrix, shadingMap, profile,
+                                unclippedBoundary = false,
+                            )
+                            decoded.rawSettings?.let { resolvedFrames.add(it) }
+                            val (frame, frameWidth, frameHeight) = decoded
+                            if (rawCrop != null) cropFrame(frame, rawCrop)
+                            else Triple(frame, frameWidth, frameHeight)
+                        }
+                    }
+
+                    // Retain every source frame so a later profile reprocess can rebuild the complete
+                    // bracket instead of pretending the first frame represents all inputs.
+                    sourceFiles = capturedFrames.mapIndexed { index, captured ->
+                        val dngThumbnail = if (isRaw) {
+                            decodedFrames[index].let { (frame, w, h) ->
+                                val displayFrame = FrameMaterializer.materialize(frame, profile.transferCurve)
+                                buildDngThumbnail(displayFrame.toArgb(), w, h, profile.transferCurve)
+                            }
+                        } else null
+                        try {
+                            logTimed("saveResult source[$index]") {
+                                saveResult(context, captured, chars, rotation, dngThumbnail, index)
+                            }.also { persistedSourceFiles += it }
+                        } finally {
+                            dngThumbnail?.recycle()
+                        }
+                    }
+                    var framePixels = logTimed("rotate frames x${decodedFrames.size}") {
+                        decodedFrames.map { (frame, frameWidth, frameHeight) ->
+                            rotateFrame(frame, frameWidth, frameHeight, rotation)
+                        }
+                    }
+                    decodedFrames = emptyList()
+                    width = framePixels.first().second
+                    height = framePixels.first().third
+                    sourceFrames = framePixels.map { it.first }
+                    framePixels = emptyList()
                 }
                 val file = sourceFiles.first()
 
@@ -762,15 +871,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         Log.e("CameraViewModel", "Error saving metadata", e)
                     }
                 }
-
-                val framePixels = logTimed("rotate frames x${decodedFrames.size}") {
-                    decodedFrames.map { (frame, frameWidth, frameHeight) ->
-                        rotateFrame(frame, frameWidth, frameHeight, rotation)
-                    }
-                }
-                val width = framePixels.first().second
-                val height = framePixels.first().third
-                val sourceFrames = framePixels.map { it.first }
 
                 // Extract exposure metadata from capture results
                 val exposureTimes = capturedFrames.map { frame ->
@@ -817,8 +917,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                     orientationDegrees = rotation,
                                 ) else null,
                             ),
-                        ), parameterSnapshot = parameters, sourceFiles = sourceFiles)
+                        ), parameterSnapshot = parameters,
+                        sourceFiles = sourceFiles,
+                        denoiserConfig = denoiserConfig,
+                        fixedPipelinePathsToProcess = preparedFixedPipelinePaths
+                            .takeIf { it.isNotEmpty() }
+                            ?.map { it.absolutePath },
+                    )
                 }
+                fixedPipelinePathsAdopted = preparedFixedPipelinePaths.isNotEmpty()
                 logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
 
                 _currentScreen.value = AppScreen.RESULTS
@@ -830,6 +937,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 Log.e("CameraViewModel", "Error taking photo", e)
             } finally {
                 capturedImages.forEach { it.image.close() }
+                if (!fixedPipelinePathsAdopted) {
+                    deleteFiles(preparedFixedPipelinePaths.map { it.absolutePath })
+                }
                 val retainedPaths = lastRunInput?.sourceFilePaths.orEmpty().toSet()
                 persistedSourceFiles
                     .filterNot { it.absolutePath in retainedPaths }
@@ -930,6 +1040,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         colorMatrix: FloatArray? = null,
         shadingMap: ShadingMap? = null,
         config: PreprocessingConfig = PreprocessingConfig(),
+        unclippedBoundary: Boolean = false,
     ): DecodedFrame {
         val image = frame.image
         return if (image.format == ImageFormat.JPEG) {
@@ -962,6 +1073,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 colorMatrix = colorMatrix,
                 shadingMap = shadingMap,
                 config = config,
+                unclippedBoundary = unclippedBoundary,
             )
 
             DecodedFrame(processed.frame, w, h, processed.settings)
@@ -1024,17 +1136,106 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return Triple(frame, frame.width, frame.height)
         }
         val size = crop.width() * crop.height()
-        val red = ShortArray(size)
-        val green = ShortArray(size)
-        val blue = ShortArray(size)
+        val red = if (frame.storage == FrameStorage.BOUNDED_U16) ShortArray(size) else null
+        val green = if (frame.storage == FrameStorage.BOUNDED_U16) ShortArray(size) else null
+        val blue = if (frame.storage == FrameStorage.BOUNDED_U16) ShortArray(size) else null
+        val redFloat = if (frame.storage == FrameStorage.UNCLIPPED_FLOAT) FloatArray(size) else null
+        val greenFloat = if (frame.storage == FrameStorage.UNCLIPPED_FLOAT) FloatArray(size) else null
+        val blueFloat = if (frame.storage == FrameStorage.UNCLIPPED_FLOAT) FloatArray(size) else null
         for (y in 0 until crop.height()) {
             val sourceOffset = (crop.top + y) * frame.width + crop.left
             val targetOffset = y * crop.width()
-            System.arraycopy(frame.red, sourceOffset, red, targetOffset, crop.width())
-            System.arraycopy(frame.green, sourceOffset, green, targetOffset, crop.width())
-            System.arraycopy(frame.blue, sourceOffset, blue, targetOffset, crop.width())
+            for (x in 0 until crop.width()) {
+                val source = sourceOffset + x
+                val target = targetOffset + x
+                if (frame.storage == FrameStorage.BOUNDED_U16) {
+                    red!![target] = frame.red[source]
+                    green!![target] = frame.green[source]
+                    blue!![target] = frame.blue[source]
+                } else {
+                    redFloat!![target] = frame.r(source)
+                    greenFloat!![target] = frame.g(source)
+                    blueFloat!![target] = frame.b(source)
+                }
+            }
         }
-        return Triple(Frame(red, green, blue, crop.width(), crop.height(), frame.sourceDepth), crop.width(), crop.height())
+        val cropped = if (frame.storage == FrameStorage.BOUNDED_U16) {
+            Frame(red!!, green!!, blue!!, crop.width(), crop.height(), frame.sourceDepth, frame.domain)
+        } else {
+            Frame.unclipped(
+                redFloat!!, greenFloat!!, blueFloat!!,
+                crop.width(), crop.height(), frame.sourceDepth, frame.domain,
+            )
+        }
+        return Triple(cropped, crop.width(), crop.height())
+    }
+
+    private fun cropAndRotateFrame(
+        frame: Frame,
+        crop: android.graphics.Rect,
+        rotationDegrees: Int,
+    ): Triple<Frame, Int, Int> {
+        require(crop.left >= 0 && crop.top >= 0 &&
+            crop.right <= frame.width && crop.bottom <= frame.height) {
+            "RAW crop ${crop.left},${crop.top},${crop.width()}x${crop.height()} is outside " +
+                "${frame.width}x${frame.height}"
+        }
+        val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+        require(normalizedRotation == 0 || normalizedRotation == 90 ||
+            normalizedRotation == 180 || normalizedRotation == 270) {
+            "Unsupported rotation: $rotationDegrees"
+        }
+        val cropWidth = crop.width()
+        val cropHeight = crop.height()
+        if (normalizedRotation == 0 && crop.left == 0 && crop.top == 0 &&
+            cropWidth == frame.width && cropHeight == frame.height) {
+            return Triple(frame, frame.width, frame.height)
+        }
+        val outputWidth = if (normalizedRotation == 90 || normalizedRotation == 270) cropHeight else cropWidth
+        val outputHeight = if (normalizedRotation == 90 || normalizedRotation == 270) cropWidth else cropHeight
+        val outputSize = outputWidth * outputHeight
+        val output = if (frame.storage == FrameStorage.BOUNDED_U16) {
+            val red = ShortArray(outputSize)
+            val green = ShortArray(outputSize)
+            val blue = ShortArray(outputSize)
+            for (y in 0 until cropHeight) {
+                for (x in 0 until cropWidth) {
+                    val source = (crop.top + y) * frame.width + crop.left + x
+                    val target = when (normalizedRotation) {
+                        0 -> y * outputWidth + x
+                        90 -> x * outputWidth + (cropHeight - 1 - y)
+                        180 -> (cropHeight - 1 - y) * outputWidth + (cropWidth - 1 - x)
+                        270 -> (cropWidth - 1 - x) * outputWidth + y
+                        else -> error("Unsupported rotation: $rotationDegrees")
+                    }
+                    red[target] = frame.red[source]
+                    green[target] = frame.green[source]
+                    blue[target] = frame.blue[source]
+                }
+            }
+            Frame(red, green, blue, outputWidth, outputHeight, frame.sourceDepth, frame.domain)
+        } else {
+            val red = FloatArray(outputSize)
+            val green = FloatArray(outputSize)
+            val blue = FloatArray(outputSize)
+            for (y in 0 until cropHeight) {
+                for (x in 0 until cropWidth) {
+                    val source = (crop.top + y) * frame.width + crop.left + x
+                    val target = when (normalizedRotation) {
+                        0 -> y * outputWidth + x
+                        90 -> x * outputWidth + (cropHeight - 1 - y)
+                        180 -> (cropHeight - 1 - y) * outputWidth + (cropWidth - 1 - x)
+                        270 -> (cropWidth - 1 - x) * outputWidth + y
+                        else -> error("Unsupported rotation: $rotationDegrees")
+                    }
+                    red[target] = frame.r(source)
+                    green[target] = frame.g(source)
+                    blue[target] = frame.b(source)
+                }
+            }
+            Frame.unclipped(red, green, blue, outputWidth, outputHeight, frame.sourceDepth, frame.domain)
+        }
+        return Triple(output, outputWidth, outputHeight)
     }
 
     /**
@@ -1046,6 +1247,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         config: PreprocessingConfig,
         captureSnapshot: RawCaptureSnapshot? = null,
         preprocessingSource: PreprocessingSource = PreprocessingSource.IMPORTED_DNG,
+        unclippedBoundary: Boolean = false,
     ): ImportedRawFrame {
         val dng = DngReader.read(file)
         val snapshot = captureSnapshot
@@ -1056,24 +1258,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val matrix = snapshot?.colorMatrix?.toFloatArray()
             ?: selectForwardMatrix(dng)?.let { multiply3x3(xyzD50ToSrgb, it) }
         val shadingMap = snapshot?.shadingMap?.toShadingMap()
-        val processed = RawPreprocessor.process(
-            rawBuffer = dng.raw,
-            width = snapshot?.rawWidth ?: dng.width,
-            height = snapshot?.rawHeight ?: dng.height,
-            rowStride = dng.rowStride,
-            pixelStride = dng.pixelStride,
-            whiteLevel = snapshot?.whiteLevel ?: dng.whiteLevel,
-            blackLevel = snapshot?.blackLevel ?: dng.blackLevel,
-            pattern = snapshot?.cfaPattern?.let(CfaPattern::fromId) ?: dng.cfaPattern,
-            whiteBalanceGains = preprocessingGains(gains),
-            colorMatrix = matrix,
-            shadingMap = shadingMap,
-            gainMaps = if (snapshot == null) dng.gainMaps else emptyList(),
-            config = config,
-        )
-        if (processed.settings.lensShading == AppliedLensShading.UNAVAILABLE) {
-            Log.w("CameraViewModel", "Imported DNG has no usable GainMap opcodes; lens falloff stays uncorrected")
-        }
         val crop = captureSnapshot?.crop?.let {
             android.graphics.Rect(it.left, it.top, it.left + it.width, it.top + it.height)
         } ?: android.graphics.Rect(
@@ -1082,15 +1266,35 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             dng.defaultCropX + dng.defaultCropWidth,
             dng.defaultCropY + dng.defaultCropHeight,
         )
-        val (cropped, croppedWidth, croppedHeight) = cropFrame(processed.frame, crop)
         // A mosaic cannot carry a baked-in rotation, so the file's orientation tag is the only
         // signal; the capture path applies the same turn before algorithms see the frame.
-        val (oriented, width, height) = rotateFrame(
-            cropped,
-            croppedWidth,
-            croppedHeight,
-            captureSnapshot?.orientationDegrees ?: dng.orientationDegrees,
-        )
+        val (processingSettings, transformed) = run {
+            val processed = RawPreprocessor.process(
+                rawBuffer = dng.raw,
+                width = snapshot?.rawWidth ?: dng.width,
+                height = snapshot?.rawHeight ?: dng.height,
+                rowStride = dng.rowStride,
+                pixelStride = dng.pixelStride,
+                whiteLevel = snapshot?.whiteLevel ?: dng.whiteLevel,
+                blackLevel = snapshot?.blackLevel ?: dng.blackLevel,
+                pattern = snapshot?.cfaPattern?.let(CfaPattern::fromId) ?: dng.cfaPattern,
+                whiteBalanceGains = preprocessingGains(gains),
+                colorMatrix = matrix,
+                shadingMap = shadingMap,
+                gainMaps = if (snapshot == null) dng.gainMaps else emptyList(),
+                config = config,
+                unclippedBoundary = unclippedBoundary,
+            )
+            if (processed.settings.lensShading == AppliedLensShading.UNAVAILABLE) {
+                Log.w("CameraViewModel", "Imported DNG has no usable GainMap opcodes; lens falloff stays uncorrected")
+            }
+            processed.settings to cropAndRotateFrame(
+                processed.frame,
+                crop,
+                captureSnapshot?.orientationDegrees ?: dng.orientationDegrees,
+            )
+        }
+        val (oriented, width, height) = transformed
         return ImportedRawFrame(
             frame = oriented,
             width = width,
@@ -1102,7 +1306,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             preprocessing = PreprocessingRecord(
                 config = config,
                 source = preprocessingSource,
-                rawSettings = listOf(processed.settings),
+                rawSettings = listOf(processingSettings),
                 colorMatrix = matrix?.toList(),
                 captureSnapshot = captureSnapshot,
             ),
@@ -1114,6 +1318,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         sourceFormat: String,
         config: PreprocessingConfig,
         captureSnapshot: RawCaptureSnapshot?,
+        unclippedBoundary: Boolean = false,
     ): ImportedRawFrame {
         if (sourceFormat == "RAW_SENSOR") {
             return try {
@@ -1126,6 +1331,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     } else {
                         PreprocessingSource.CAMERA_RAW
                     },
+                    unclippedBoundary = unclippedBoundary,
                 )
             } catch (e: DngParseException) {
                 if (captureSnapshot != null) throw e
@@ -1225,16 +1431,30 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     ): Triple<Frame, Int, Int> {
         val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
         if (normalizedRotation == 0) return Triple(frame, width, height)
-        val red = rotatePlane(frame.red, width, height, normalizedRotation)
-        val green = rotatePlane(frame.green, width, height, normalizedRotation)
-        val blue = rotatePlane(frame.blue, width, height, normalizedRotation)
         val rotatedWidth = if (normalizedRotation == 90 || normalizedRotation == 270) height else width
         val rotatedHeight = if (normalizedRotation == 90 || normalizedRotation == 270) width else height
-        return Triple(
-            Frame(red, green, blue, rotatedWidth, rotatedHeight, frame.sourceDepth),
-            rotatedWidth,
-            rotatedHeight,
-        )
+        val rotated = if (frame.storage == FrameStorage.BOUNDED_U16) {
+            Frame(
+                rotatePlane(frame.red, width, height, normalizedRotation),
+                rotatePlane(frame.green, width, height, normalizedRotation),
+                rotatePlane(frame.blue, width, height, normalizedRotation),
+                rotatedWidth,
+                rotatedHeight,
+                frame.sourceDepth,
+                frame.domain,
+            )
+        } else {
+            Frame.unclipped(
+                rotateFloatPlane(frame.floatPlane(0), width, height, normalizedRotation),
+                rotateFloatPlane(frame.floatPlane(1), width, height, normalizedRotation),
+                rotateFloatPlane(frame.floatPlane(2), width, height, normalizedRotation),
+                rotatedWidth,
+                rotatedHeight,
+                frame.sourceDepth,
+                frame.domain,
+            )
+        }
+        return Triple(rotated, rotatedWidth, rotatedHeight)
     }
 
     private fun rotatePlane(
@@ -1243,6 +1463,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         height: Int,
         rotation: Int,
     ): ShortArray = ShortArray(pixels.size).also { output ->
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val target = when (rotation) {
+                    90 -> x * height + (height - 1 - y)
+                    180 -> (height - 1 - y) * width + (width - 1 - x)
+                    270 -> (width - 1 - x) * height + y
+                    else -> error("Unsupported rotation: $rotation")
+                }
+                output[target] = pixels[y * width + x]
+            }
+        }
+    }
+
+    private fun rotateFloatPlane(
+        pixels: FloatArray,
+        width: Int,
+        height: Int,
+        rotation: Int,
+    ): FloatArray = FloatArray(pixels.size).also { output ->
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val target = when (rotation) {
@@ -1359,13 +1598,131 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         reusePreprocessedPaths: List<String>? = null,
         parameterSnapshot: Map<String, Map<String, Double>> = _algorithmParameters.value,
         sourceFiles: List<File> = emptyList(),
+        denoiserConfig: DenoiserConfig = _denoiserConfig.value,
+        fixedBoundaryFrames: MutableList<Frame>? = null,
+        reuseFixedPipelinePaths: List<String>? = null,
+        fixedPipelinePathsToProcess: List<String>? = null,
     ) = coroutineScope {
         Log.d("CameraViewModel", "Running ${algorithms.size} algorithms on ${frames.size} frame(s)")
+
+        require(fixedBoundaryFrames == null || fixedBoundaryFrames.size == frames.size) {
+            "Fixed-boundary and algorithm frame counts differ"
+        }
+        val denoiser = denoiserConfig.create()
+        val denoiserRuntimes = mutableListOf<Long>()
+        var denoiserId: String? = null
+        var denoiserEffectiveParameters: Map<String, Double> = emptyMap()
+        var denoiserInputDomain: FrameDomain? = null
+        var denoiserInputStorage: FrameStorage? = null
+        val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
+        val fixedPipelineFiles = when {
+            fixedPipelinePathsToProcess != null -> fixedPipelinePathsToProcess.map(::File)
+            reuseFixedPipelinePaths != null -> reuseFixedPipelinePaths.map(::File)
+            fixedBoundaryFrames != null -> frames.indices.map { index ->
+                File(context.filesDir, "FIXED_PIPELINE_${timestamp}_$index.kbframe")
+            }
+            else -> emptyList()
+        }
+        val fixedBoundaryMetadata = fixedBoundaryFrames?.map { frame ->
+            FixedBoundaryMetadata(
+                width = frame.width,
+                height = frame.height,
+                sourceDepth = frame.sourceDepth,
+                domain = frame.domain,
+                storage = frame.storage,
+            )
+        }.orEmpty().toMutableList()
+        val newFixedPipelinePaths = if ((fixedBoundaryFrames != null || fixedPipelinePathsToProcess != null) &&
+            reuseFixedPipelinePaths == null
+        ) {
+            fixedPipelineFiles.map { it.absolutePath }
+        } else {
+            emptyList()
+        }
+        val algorithmFrames = try {
+            when {
+                fixedPipelinePathsToProcess != null -> {
+                    val materializedFrames = mutableListOf<Frame>()
+                    for ((index, fixedFile) in fixedPipelineFiles.withIndex()) {
+                        val boundaryFrame = decodeFrameArtifact(fixedFile.absolutePath, width, height)
+                        if (fixedBoundaryMetadata.size <= index) {
+                            fixedBoundaryMetadata += FixedBoundaryMetadata(
+                                width = boundaryFrame.width,
+                                height = boundaryFrame.height,
+                                sourceDepth = boundaryFrame.sourceDepth,
+                                domain = boundaryFrame.domain,
+                                storage = boundaryFrame.storage,
+                            )
+                        }
+                        val algorithmFrame = if (denoiser != null) {
+                            denoiserInputDomain = boundaryFrame.domain
+                            denoiserInputStorage = boundaryFrame.storage
+                            val execution = DenoiserRunner.run(
+                                boundaryFrame,
+                                denoiser,
+                                denoiserConfig.parameters(),
+                            )
+                            denoiserId = execution.denoiserId
+                            denoiserEffectiveParameters = execution.effectiveParameters
+                            denoiserRuntimes += execution.elapsedMs
+                            FrameMaterializer.materialize(
+                                execution.output,
+                                captureMetadata.preprocessing.config.transferCurve,
+                            )
+                        } else {
+                            FrameMaterializer.materialize(
+                                boundaryFrame,
+                                captureMetadata.preprocessing.config.transferCurve,
+                            )
+                        }
+                        materializedFrames += algorithmFrame
+                    }
+                    materializedFrames
+                }
+                fixedBoundaryFrames != null && denoiser != null -> {
+                    for (index in fixedBoundaryFrames.indices) {
+                        var boundaryFrame = fixedBoundaryFrames[index]
+                        if (reuseFixedPipelinePaths == null) {
+                            FrameArtifact.save(fixedPipelineFiles[index], boundaryFrame)
+                        }
+                        denoiserInputDomain = boundaryFrame.domain
+                        denoiserInputStorage = boundaryFrame.storage
+                        val execution = DenoiserRunner.run(
+                            boundaryFrame,
+                            denoiser,
+                            denoiserConfig.parameters(),
+                        )
+                        denoiserId = execution.denoiserId
+                        denoiserEffectiveParameters = execution.effectiveParameters
+                        denoiserRuntimes += execution.elapsedMs
+                        fixedBoundaryFrames[index] = execution.output
+                        boundaryFrame = execution.output
+                        fixedBoundaryFrames[index] = FrameMaterializer.materialize(
+                            boundaryFrame,
+                            captureMetadata.preprocessing.config.transferCurve,
+                        )
+                    }
+                    fixedBoundaryFrames
+                }
+                fixedBoundaryFrames != null -> {
+                    fixedBoundaryFrames.forEachIndexed { index, boundaryFrame ->
+                        fixedBoundaryFrames[index] = FrameMaterializer.materialize(
+                            boundaryFrame,
+                            captureMetadata.preprocessing.config.transferCurve,
+                        )
+                    }
+                    fixedBoundaryFrames
+                }
+                else -> frames
+            }
+        } catch (failure: Throwable) {
+            deleteFiles(newFixedPipelinePaths)
+            throw failure
+        }
 
         val results = mutableListOf<BenchmarkResult>()
         val outputRecords = mutableListOf<AlgorithmOutputRecord>()
         val artifacts = mutableListOf<ExportImageArtifact>()
-        val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
         val saveJobs = mutableListOf<Deferred<Unit>>()
         histogramGeneration++
         histogramJob?.cancelAndJoin()
@@ -1378,36 +1735,77 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
         logMemory("benchmark start")
 
+        fixedPipelineFiles.forEachIndexed { index, fixedFile ->
+            val boundary = fixedBoundaryMetadata?.getOrNull(index)
+            artifacts.add(
+                ExportImageArtifact(
+                    id = "image_fixed_pipeline_$index",
+                    path = fixedFile.absolutePath,
+                    role = "fixed_pipeline_output",
+                    width = boundary?.width ?: width,
+                    height = boundary?.height ?: height,
+                    frameIndex = index,
+                    sourceDepth = boundary?.sourceDepth,
+                    domain = boundary?.domain?.name?.lowercase(Locale.ROOT)
+                        ?: captureMetadata.denoiser?.inputDomain,
+                    storage = boundary?.storage?.name?.lowercase(Locale.ROOT)
+                        ?: captureMetadata.denoiser?.inputStorage,
+                )
+            )
+        }
+
         // A re-run points at the exact frame artifacts the first run already wrote. The PNGs next
         // to them are display renditions only and are never used as algorithm inputs.
-        val preprocessedFiles = frames.indices.map { index ->
+        val preprocessedFiles = algorithmFrames.indices.map { index ->
             val preprocessedFile = reusePreprocessedPaths?.getOrNull(index)?.let { File(it) }
                 ?: File(context.filesDir, "PREPROCESSED_${timestamp}_$index.kbframe")
             artifacts.add(
                 ExportImageArtifact(
-                    id = "image_preprocessed_$index",
+                    id = "image_algorithm_input_$index",
                     path = preprocessedFile.absolutePath,
-                    role = "preprocessed_input",
+                    role = "algorithm_input",
                     width = width,
                     height = height,
                     frameIndex = index,
-                    sourceDepth = frames[index].sourceDepth,
+                    sourceDepth = algorithmFrames[index].sourceDepth,
+                    domain = algorithmFrames[index].domain.name.lowercase(Locale.ROOT),
+                    storage = algorithmFrames[index].storage.name.lowercase(Locale.ROOT),
                 )
             )
             val displayFile = pngFile(preprocessedFile)
             if (displayFile != preprocessedFile) {
                 artifacts.add(ExportImageArtifact(
-                    id = "image_preprocessed_png_$index",
+                    id = "image_algorithm_input_png_$index",
                     path = displayFile.absolutePath,
                     role = "display_png",
                     width = width,
                     height = height,
                     frameIndex = index,
-                    canonicalImageId = "image_preprocessed_$index",
+                    canonicalImageId = "image_algorithm_input_$index",
                 ))
             }
             preprocessedFile
         }
+
+        val denoiserRecord = if (denoiserId != null) {
+            val output = algorithmFrames.first()
+            DenoiserRunRecord(
+            id = denoiserId!!,
+            effectiveParameters = denoiserEffectiveParameters,
+            runtimeMs = denoiserRuntimes.toList(),
+                inputArtifactIds = fixedPipelineFiles.mapIndexed { index, _ -> "image_fixed_pipeline_$index" },
+                outputArtifactIds = preprocessedFiles.mapIndexed { index, _ -> "image_algorithm_input_$index" },
+                inputDomain = denoiserInputDomain!!.name.lowercase(Locale.ROOT),
+                outputDomain = output.domain.name.lowercase(Locale.ROOT),
+                inputStorage = denoiserInputStorage!!.name.lowercase(Locale.ROOT),
+                outputStorage = output.storage.name.lowercase(Locale.ROOT),
+            )
+        } else {
+            captureMetadata.denoiser?.takeIf {
+                reuseFixedPipelinePaths != null && denoiserConfig.isEnabled
+            }
+        }
+        val effectiveCaptureMetadata = captureMetadata.copy(denoiser = denoiserRecord)
 
         persistedSources.forEachIndexed { index, sourceFile ->
             artifacts.add(
@@ -1422,13 +1820,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         if (preprocessedFiles.isNotEmpty()) {
+            val fullscreenInputSubtitle = listOf(
+                effectiveCaptureMetadata.preprocessing.config.summary(),
+                if (effectiveCaptureMetadata.preprocessing.isRaw) "RAW" else "Rendered",
+                denoiserConfig.summary(),
+            ).joinToString(" / ")
             preprocessedFiles.forEachIndexed { index, preprocessedFile ->
                 results.add(
                     BenchmarkResult(
                         id = "preprocessed_$index",
                         title = "Pre-processed Input",
-                        subtitle = captureMetadata.preprocessing.config.summary() +
-                            if (captureMetadata.preprocessing.isRaw) " / RAW" else " / Rendered",
+                        fullscreenSubtitle = fullscreenInputSubtitle,
                         imagePath = pngFile(preprocessedFile).absolutePath,
                         canonicalImagePath = preprocessedFile.absolutePath,
                         preprocessedFrameIndex = index,
@@ -1447,20 +1849,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 deleteFiles(artifacts.filter { artifact ->
                     artifact.role == "algorithm_output" ||
                         artifact.canonicalImageId?.startsWith("image_output_") == true ||
-                        (reusePreprocessedPaths == null && (
-                            artifact.role == "preprocessed_input" ||
-                                artifact.canonicalImageId?.startsWith("image_preprocessed_") == true
-                            ))
+                            (reusePreprocessedPaths == null && (
+                                artifact.role == "algorithm_input" ||
+                                artifact.canonicalImageId?.startsWith("image_algorithm_input_") == true
+                            )) ||
+                        ((fixedBoundaryFrames != null || fixedPipelinePathsToProcess != null) &&
+                            reuseFixedPipelinePaths == null &&
+                            (artifact.role == "fixed_pipeline_output" ||
+                                artifact.canonicalImageId?.startsWith("image_fixed_pipeline_") == true))
                 }.map { it.path })
             }
         }
 
-        val sourceFrames = frames
+        val sourceFrames = algorithmFrames
 
         for (algo in algorithms) {
             val minFrames = algo.metadata.frameRequirements.minFrames
-            if (frames.size < minFrames) {
-                Log.w("CameraViewModel", "Skipping ${algo.name}: needs $minFrames frames, have ${frames.size}")
+            if (algorithmFrames.size < minFrames) {
+                Log.w("CameraViewModel", "Skipping ${algo.name}: needs $minFrames frames, have ${algorithmFrames.size}")
                 continue
             }
 
@@ -1513,6 +1919,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         role = "algorithm_output",
                         width = output.width,
                         height = output.height,
+                        sourceDepth = output.frame.sourceDepth,
+                        domain = output.frame.domain.name.lowercase(Locale.ROOT),
+                        storage = output.frame.storage.name.lowercase(Locale.ROOT),
                     )
                 )
                 val displayFile = pngFile(outFile)
@@ -1538,7 +1947,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     subtitle = describeOverrides(algo, overrides),
                     imagePath = displayFile.absolutePath,
                     canonicalImagePath = outFile.absolutePath,
-                    capturedFrameCount = frames.size,
+                    capturedFrameCount = algorithmFrames.size,
                     inputFrameIndices = inputFrameIndices,
                     metrics = BenchmarkMetrics(runtimeMs = output.totalTime)
                 ))
@@ -1551,7 +1960,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     title = "${algo.name} (failed)",
                     imagePath = originalFile.absolutePath,
                     displayRotationDegrees = originalDisplayRotation,
-                    capturedFrameCount = frames.size,
+                    capturedFrameCount = algorithmFrames.size,
                     inputFrameIndices = inputFrameIndices,
                     metrics = BenchmarkMetrics()
                 ))
@@ -1563,8 +1972,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             preprocessedFiles.forEachIndexed { index, preprocessedFile ->
                 saveJobs += async(Dispatchers.Default) {
                     logTimed("save frame artifact preprocessed[$index] (${width}x$height)") {
-                        FrameArtifact.save(preprocessedFile, frames[index])
-                        saveFramePreview(pngFile(preprocessedFile), frames[index], previewTransfer)
+                        FrameArtifact.save(preprocessedFile, algorithmFrames[index])
+                        saveFramePreview(pngFile(preprocessedFile), algorithmFrames[index], previewTransfer)
                     }
                 }
             }
@@ -1574,7 +1983,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (!displayFile.isFile) {
                     saveJobs += async(Dispatchers.Default) {
                         logTimed("restore frame preview[$index] (${width}x$height)") {
-                            saveFramePreview(displayFile, frames[index], previewTransfer)
+                            saveFramePreview(displayFile, algorithmFrames[index], previewTransfer)
                         }
                     }
                 }
@@ -1598,21 +2007,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         lastAlgorithmOutputs = outputRecords
         exportImageArtifacts = artifacts
-        this@CameraViewModel.captureMetadata = captureMetadata
+        this@CameraViewModel.captureMetadata = effectiveCaptureMetadata
         lastRunInput = LastRunInput(
             originalFilePath = persistedSources.first().absolutePath,
             originalDisplayRotation = originalDisplayRotation,
             sourceFilePaths = persistedSources.map { it.absolutePath },
             preprocessedPaths = preprocessedFiles.map { it.absolutePath },
+            fixedPipelinePaths = fixedPipelineFiles.map { it.absolutePath },
             width = width,
             height = height,
             exposureTimes = exposureTimes,
             isoValues = isoValues,
             captureTimeMs = captureTimeMs,
-            captureMetadata = captureMetadata,
+            captureMetadata = effectiveCaptureMetadata,
+            denoiserConfig = denoiserConfig,
         )
         _canRerun.value = preprocessedFiles.isNotEmpty()
-        _canReprocessFromSource.value = captureMetadata.sourceFormat in setOf("RAW_SENSOR", "JPEG", "PNG") &&
+        _canReprocessFromSource.value = effectiveCaptureMetadata.sourceFormat in setOf("RAW_SENSOR", "JPEG", "PNG") &&
             persistedSources.isNotEmpty()
         _benchmarkResults.value = results
         Log.d("Perf", "benchmark results published (${results.size} tiles)")
@@ -1673,6 +2084,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     reusePreprocessedPaths = previous.preprocessedPaths,
                     parameterSnapshot = parameters,
                     sourceFiles = previous.sourceFilePaths.map(::File),
+                    denoiserConfig = previous.denoiserConfig,
+                    reuseFixedPipelinePaths = previous.fixedPipelinePaths,
                 )
                 if (_referenceImage.value != null) {
                     logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
@@ -1684,6 +2097,61 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } catch (e: Exception) {
                 _processingError.value = e.message ?: "Re-run failed"
                 Log.e("CameraViewModel", "Re-run failed", e)
+            } finally {
+                _isProcessing.value = false
+            }
+        }
+    }
+
+    /** Reapplies only the optional denoiser branch to the last exact fixed-boundary artifacts. */
+    fun rerunDenoiser(context: Context) {
+        val previous = lastRunInput ?: return
+        if (_isProcessing.value) return
+        if (previous.fixedPipelinePaths.isEmpty()) {
+            reprocessFromSource(context)
+            return
+        }
+        val algorithms = getEnabledAlgorithms()
+        val parameters = _algorithmParameters.value
+        val denoiserConfig = _denoiserConfig.value
+        val stalePaths = exportImageArtifacts
+            .filter {
+                it.role == "algorithm_input" ||
+                    it.role == "algorithm_output" ||
+                    it.role == "display_png"
+            }
+            .map { it.path }
+        _isProcessing.value = true
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                runBenchmarks(
+                    context = context,
+                    originalFile = File(previous.originalFilePath),
+                    algorithms = algorithms,
+                    frames = emptyList(),
+                    width = previous.width,
+                    height = previous.height,
+                    exposureTimes = previous.exposureTimes,
+                    isoValues = previous.isoValues,
+                    captureTimeMs = previous.captureTimeMs,
+                    originalDisplayRotation = previous.originalDisplayRotation,
+                    captureMetadata = previous.captureMetadata,
+                    parameterSnapshot = parameters,
+                    sourceFiles = previous.sourceFilePaths.map(::File),
+                    denoiserConfig = denoiserConfig,
+                    reuseFixedPipelinePaths = previous.fixedPipelinePaths,
+                    fixedPipelinePathsToProcess = previous.fixedPipelinePaths,
+                )
+                if (_referenceImage.value != null) {
+                    logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
+                }
+                withContext(Dispatchers.IO) { deleteFiles(stalePaths) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _processingError.value = e.message ?: "Denoiser re-run failed"
+                Log.e("CameraViewModel", "Denoiser re-run failed", e)
             } finally {
                 _isProcessing.value = false
             }
@@ -1706,9 +2174,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val algorithms = getEnabledAlgorithms()
         val parameters = _algorithmParameters.value
         val profile = _preprocessingConfig.value
+        val denoiserConfig = _denoiserConfig.value
         val stalePaths = exportImageArtifacts
             .filter {
-                it.role == "preprocessed_input" ||
+                it.role == "algorithm_input" ||
+                    it.role == "fixed_pipeline_output" ||
                     it.role == "algorithm_output" ||
                     it.role == "display_png"
             }
@@ -1716,45 +2186,114 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _isProcessing.value = true
 
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val decoded = withContext(Dispatchers.Default) {
-                    sourceFiles.map { source ->
-                        decodeRetainedSource(
-                            source,
-                            previous.captureMetadata.sourceFormat,
-                            profile,
-                            captureSnapshot = snapshot,
-                        )
-                    }
+            val preparedFixedPipelinePaths = if (denoiserConfig.isEnabled) {
+                val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
+                sourceFiles.indices.map { index ->
+                    File(context.filesDir, "FIXED_PIPELINE_${timestamp}_$index.kbframe").absolutePath
                 }
-                require(decoded.size == previous.exposureTimes.size &&
-                    decoded.size == previous.isoValues.size) {
+            } else {
+                emptyList()
+            }
+            var fixedPipelinePathsAdopted = false
+            try {
+                require(sourceFiles.isNotEmpty()) { "No retained source files" }
+                require(sourceFiles.size == previous.exposureTimes.size &&
+                    sourceFiles.size == previous.isoValues.size) {
                     "Retained source and capture metadata counts differ"
                 }
-                val width = decoded.firstOrNull()?.width ?: error("No retained RAW sources")
-                val height = decoded.first().height
-                require(decoded.all { it.width == width && it.height == height }) {
-                    "Retained RAW sources have different processed dimensions"
+                val processedFrames: MutableList<Frame>
+                val width: Int
+                val height: Int
+                val metadata: CaptureMetadata
+                if (denoiserConfig.isEnabled) {
+                    val rawSettings = mutableListOf<ResolvedRawPreprocessing>()
+                    var firstPreprocessing: PreprocessingRecord? = null
+                    var firstWhiteLevel = 0
+                    var firstBlackLevel = 0
+                    var firstCfaPattern = 0
+                    var firstWhiteBalanceGains: List<Float>? = null
+                    var processedWidth = 0
+                    var processedHeight = 0
+
+                    withContext(Dispatchers.Default) {
+                        sourceFiles.forEachIndexed { index, source ->
+                            val decoded = decodeRetainedSource(
+                                source,
+                                previous.captureMetadata.sourceFormat,
+                                profile,
+                                captureSnapshot = snapshot,
+                                unclippedBoundary = true,
+                            )
+                            if (index == 0) {
+                                processedWidth = decoded.width
+                                processedHeight = decoded.height
+                                firstPreprocessing = decoded.preprocessing
+                                firstWhiteLevel = decoded.whiteLevel
+                                firstBlackLevel = decoded.blackLevel
+                                firstCfaPattern = decoded.cfaPattern
+                                firstWhiteBalanceGains = decoded.whiteBalanceGains
+                            } else {
+                                require(decoded.width == processedWidth && decoded.height == processedHeight) {
+                                    "Retained RAW sources have different processed dimensions"
+                                }
+                            }
+                            rawSettings += decoded.preprocessing.rawSettings
+                            FrameArtifact.save(File(preparedFixedPipelinePaths[index]), decoded.frame)
+                        }
+                    }
+
+                    width = processedWidth
+                    height = processedHeight
+                    val first = firstPreprocessing ?: error("No retained source files")
+                    val preprocessing = first.copy(config = profile, rawSettings = rawSettings)
+                    metadata = previous.captureMetadata.copy(
+                        width = width,
+                        height = height,
+                        rawWhiteLevel = firstWhiteLevel.takeIf { preprocessing.isRaw },
+                        rawBlackLevel = firstBlackLevel.takeIf { preprocessing.isRaw },
+                        cfaPattern = firstCfaPattern.takeIf { preprocessing.isRaw },
+                        whiteBalanceGains = firstWhiteBalanceGains,
+                        preprocessing = preprocessing,
+                    )
+                    processedFrames = mutableListOf()
+                } else {
+                    val decoded = withContext(Dispatchers.Default) {
+                        sourceFiles.map { source ->
+                            decodeRetainedSource(
+                                source,
+                                previous.captureMetadata.sourceFormat,
+                                profile,
+                                captureSnapshot = snapshot,
+                                unclippedBoundary = false,
+                            )
+                        }
+                    }
+                    width = decoded.first().width
+                    height = decoded.first().height
+                    require(decoded.all { it.width == width && it.height == height }) {
+                        "Retained RAW sources have different processed dimensions"
+                    }
+                    val first = decoded.first()
+                    val preprocessing = first.preprocessing.copy(
+                        config = profile,
+                        rawSettings = decoded.flatMap { it.preprocessing.rawSettings },
+                    )
+                    metadata = previous.captureMetadata.copy(
+                        width = width,
+                        height = height,
+                        rawWhiteLevel = first.whiteLevel.takeIf { preprocessing.isRaw },
+                        rawBlackLevel = first.blackLevel.takeIf { preprocessing.isRaw },
+                        cfaPattern = first.cfaPattern.takeIf { preprocessing.isRaw },
+                        whiteBalanceGains = first.whiteBalanceGains,
+                        preprocessing = preprocessing,
+                    )
+                    processedFrames = decoded.map { it.frame }.toMutableList()
                 }
-                val first = decoded.first()
-                val preprocessing = first.preprocessing.copy(
-                    config = profile,
-                    rawSettings = decoded.flatMap { it.preprocessing.rawSettings },
-                )
-                val metadata = previous.captureMetadata.copy(
-                    width = width,
-                    height = height,
-                    rawWhiteLevel = first.whiteLevel.takeIf { preprocessing.isRaw },
-                    rawBlackLevel = first.blackLevel.takeIf { preprocessing.isRaw },
-                    cfaPattern = first.cfaPattern.takeIf { preprocessing.isRaw },
-                    whiteBalanceGains = first.whiteBalanceGains,
-                    preprocessing = preprocessing,
-                )
                 runBenchmarks(
                     context = context,
                     originalFile = sourceFiles.first(),
                     algorithms = algorithms,
-                    frames = decoded.map { it.frame },
+                    frames = processedFrames,
                     width = width,
                     height = height,
                     exposureTimes = previous.exposureTimes,
@@ -1764,7 +2303,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     captureMetadata = metadata,
                     parameterSnapshot = parameters,
                     sourceFiles = sourceFiles,
+                    denoiserConfig = denoiserConfig,
+                    fixedPipelinePathsToProcess = preparedFixedPipelinePaths
+                        .takeIf { it.isNotEmpty() },
                 )
+                fixedPipelinePathsAdopted = preparedFixedPipelinePaths.isNotEmpty()
                 if (_referenceImage.value != null) {
                     logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
                 }
@@ -1775,6 +2318,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 _processingError.value = e.message ?: "Source reprocessing failed"
                 Log.e("CameraViewModel", "Source reprocessing failed", e)
             } finally {
+                if (!fixedPipelinePathsAdopted) {
+                    deleteFiles(preparedFixedPipelinePaths)
+                }
                 _isProcessing.value = false
             }
         }
@@ -1893,6 +2439,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun loadInputFromGallery(context: Context, uri: Uri) {
         if (_isProcessing.value) return
         val profile = _preprocessingConfig.value
+        val denoiserConfig = _denoiserConfig.value
         val algorithms = getEnabledAlgorithms()
         val parameters = _algorithmParameters.value
         _isProcessing.value = true
@@ -1908,7 +2455,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // would not reproduce the algorithm input of the capture it came from.
                 val rawFrame = if (isRaw) {
                     try {
-                        logTimed("decodeImportedDng") { decodeImportedDng(persistedImage.file, profile) }
+                        logTimed("decodeImportedDng") {
+                            decodeImportedDng(
+                                persistedImage.file,
+                                profile,
+                                unclippedBoundary = denoiserConfig.isEnabled,
+                            )
+                        }
                     } catch (e: DngParseException) {
                         Log.w("CameraViewModel", "Native DNG import unavailable", e)
                         if (!requestDngFallback()) {
@@ -1944,10 +2497,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 val width = frame.width
                 val height = frame.height
+                val processedFrames = mutableListOf(frame.frame)
 
                 logTimedSuspend("runBenchmarks") {
                     runBenchmarks(
-                        context, persistedImage.file, algorithms, listOf(frame.frame), width, height,
+                        context, persistedImage.file, algorithms, processedFrames, width, height,
                         exposureTimes = listOf(0L), isoValues = listOf(100), captureTimeMs = 0L,
                         // The results image loader renders a DNG without honouring its TIFF orientation
                         // tag, so an imported RAW needs the same viewer-side compensation the capture
@@ -1969,6 +2523,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             preprocessing = frame.preprocessing,
                         ),
                         parameterSnapshot = parameters,
+                        denoiserConfig = denoiserConfig,
+                        fixedBoundaryFrames = if (denoiserConfig.isEnabled) processedFrames else null,
                     )
                 }
                 logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
@@ -2238,6 +2794,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         captureMetadata.rawBlackLevel?.let { capture.put("raw_black_level", it) }
         captureMetadata.cfaPattern?.let { capture.put("raw_cfa_pattern", it) }
         captureMetadata.whiteBalanceGains?.let { capture.put("white_balance_gains", JSONArray(it)) }
+        captureMetadata.denoiser?.let { denoiser ->
+            val parameters = JSONObject()
+            denoiser.effectiveParameters.forEach { (id, value) -> parameters.put(id, value) }
+            manifest.put(
+                "denoiser",
+                JSONObject()
+                    .put("id", denoiser.id)
+                    .put("parameters", parameters)
+                    .put("runtime_ms", JSONArray(denoiser.runtimeMs))
+                    .put("input_image_ids", JSONArray(denoiser.inputArtifactIds))
+                    .put("output_image_ids", JSONArray(denoiser.outputArtifactIds))
+                    .put("input_domain", denoiser.inputDomain)
+                    .put("output_domain", denoiser.outputDomain)
+                    .put("input_storage", denoiser.inputStorage)
+                    .put("output_storage", denoiser.outputStorage)
+            )
+        }
 
         val imageByPath = artifacts.associateBy { it.path }
         val imageEntries = JSONArray()
@@ -2250,6 +2823,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 .put("height", artifact.height)
             artifact.frameIndex?.let { entry.put("frame_index", it) }
             artifact.sourceDepth?.let { entry.put("source_depth", it) }
+            artifact.domain?.let { entry.put("domain", it) }
+            artifact.storage?.let { entry.put("storage", it) }
             artifact.canonicalImageId?.let { entry.put("canonical_image_id", it) }
             imageEntries.put(entry)
         }
@@ -2275,7 +2850,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         results.forEach { result ->
             val image = imageByPath[result.canonicalImagePath] ?: return@forEach
             val kind = when {
-                result.id.startsWith("preprocessed_") -> "preprocessed_input"
+                result.id.startsWith("preprocessed_") -> "algorithm_input"
                 result.id == "reference" -> "reference_image"
                 else -> "algorithm"
             }
@@ -2290,7 +2865,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             if (kind == "algorithm") {
                 entry.put("input_frame_indices", JSONArray(result.inputFrameIndices))
-                entry.put("input_image_ids", JSONArray(result.inputFrameIndices.map { "image_preprocessed_$it" }))
+                entry.put("input_image_ids", JSONArray(result.inputFrameIndices.map { "image_algorithm_input_$it" }))
                 entry.put(
                     "metrics",
                     JSONObject()
@@ -2306,7 +2881,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     parameters.forEach { (id, value) -> parameterEntry.put(id, value) }
                     entry.put("parameters", parameterEntry)
                 }
-            } else if (kind == "preprocessed_input") {
+            } else if (kind == "algorithm_input") {
                 result.preprocessedFrameIndex?.let { entry.put("frame_index", it) }
             }
             resultEntries.put(entry)

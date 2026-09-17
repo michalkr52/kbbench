@@ -3,6 +3,8 @@ package com.kbbench.app.settings
 import android.content.Context
 import android.util.Log
 import com.kbbench.algorithm.preprocessing.PreprocessingConfig
+import com.kbbench.app.preprocessing.DenoiserConfig
+import com.kbbench.app.preprocessing.DenoiserConfigJson
 import com.kbbench.app.preprocessing.PreprocessingProfileJson
 import org.json.JSONObject
 
@@ -88,6 +90,20 @@ class BenchmarkSettingsStore(context: Context) {
         prefs.edit().putString(KEY_PREPROCESSING_PROFILE, PreprocessingProfileJson.encode(config).toString()).apply()
     }
 
+    fun loadDenoiserConfig(): DenoiserConfig {
+        val saved = prefs.getString(KEY_DENOISER, null) ?: return DenoiserConfig()
+        return try {
+            DenoiserConfigJson.decode(JSONObject(saved))
+        } catch (e: Exception) {
+            Log.w(TAG, "Cannot load denoiser settings; using defaults", e)
+            DenoiserConfig()
+        }
+    }
+
+    fun saveDenoiserConfig(config: DenoiserConfig) {
+        prefs.edit().putString(KEY_DENOISER, DenoiserConfigJson.encode(config).toString()).apply()
+    }
+
     private companion object {
         const val TAG = "BenchmarkSettings"
         const val PREFS_NAME = "kbbench_settings"
@@ -96,5 +112,6 @@ class BenchmarkSettingsStore(context: Context) {
         const val KEY_CAPTURE_FORMAT = "capture_format"
         const val KEY_SHOW_RULE_OF_THIRDS = "show_rule_of_thirds"
         const val KEY_PREPROCESSING_PROFILE = "preprocessing_profile"
+        const val KEY_DENOISER = "denoiser"
     }
 }
