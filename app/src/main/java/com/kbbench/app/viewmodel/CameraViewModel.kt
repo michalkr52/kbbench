@@ -439,6 +439,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var deviceOrientation = 0 // 0, 90, 180, 270
 
     private var hasPurgedOrphanedFiles = false
+    private var orphanPurgeJob: Job? = null
 
     fun setCaptureFormat(format: Int) {
         _captureFormat.value = format
@@ -461,7 +462,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun purgeOrphanedFilesOnce(context: Context) {
         if (hasPurgedOrphanedFiles) return
         hasPurgedOrphanedFiles = true
-        viewModelScope.launch(Dispatchers.IO) {
+        orphanPurgeJob = viewModelScope.launch(Dispatchers.IO) {
             val prefixes = listOf("IMG_", "REF_", "PREPROCESSED_", "OUT_", "PNG_", "PREVIEW_")
             val orphaned = context.filesDir.listFiles { file ->
                 prefixes.any { file.name.startsWith(it) }
@@ -686,6 +687,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             var preparedFixedPipelinePaths = emptyList<File>()
             var fixedPipelinePathsAdopted = false
             try {
+                orphanPurgeJob?.join()
                 val isRaw = _captureFormat.value == ImageFormat.RAW_SENSOR
                 val maxFramesNeeded = algorithms.maxOfOrNull { it.metadata.frameRequirements.minFrames } ?: 1
 
@@ -1820,9 +1822,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         if (preprocessedFiles.isNotEmpty()) {
+            val inputSourceLabel = when (effectiveCaptureMetadata.preprocessing.source) {
+                PreprocessingSource.CANONICAL_FRAME -> {
+                    "Canonical U16 / ${algorithmFrames.firstOrNull()?.domain?.name ?: "unknown"}"
+                }
+                else -> if (effectiveCaptureMetadata.preprocessing.isRaw) "RAW" else "Rendered"
+            }
             val fullscreenInputSubtitle = listOf(
                 effectiveCaptureMetadata.preprocessing.config.summary(),
-                if (effectiveCaptureMetadata.preprocessing.isRaw) "RAW" else "Rendered",
+                inputSourceLabel,
                 denoiserConfig.summary(),
             ).joinToString(" / ")
             preprocessedFiles.forEachIndexed { index, preprocessedFile ->
@@ -2062,6 +2070,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 .filter { it.role == "algorithm_output" || it.canonicalImageId?.startsWith("image_output_") == true }
                 .map { it.path }
             try {
+                orphanPurgeJob?.join()
                 val frames = withContext(Dispatchers.Default) {
                     logTimed("decode preprocessed frames x${previous.preprocessedPaths.size}") {
                         previous.preprocessedPaths.map { path ->
@@ -2336,6 +2345,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return frame
     }
 
+    private fun decodeCanonicalInputArtifact(file: File): Frame {
+        val frame = FrameArtifact.load(file)
+        require(frame.storage == FrameStorage.BOUNDED_U16) {
+            "This .kbframe contains an unclipped Float boundary; select a bounded U16 algorithm input"
+        }
+        return frame
+    }
+
     fun backToCamera() {
         // The just-cleared session's persisted PNG/JPEG/DNG files are otherwise never deleted,
         // which is what let filesDir grow unbounded across repeated test/benchmark runs.
@@ -2446,9 +2463,48 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             var sourceFile: File? = null
             try {
+                orphanPurgeJob?.join()
                 val persistedImage = logTimed("persistPickedImage") { persistPickedImage(context, uri, "IMG") }
                     ?: throw IOException("Unable to read the selected image")
                 sourceFile = persistedImage.file
+                if (persistedImage.sourceFormat == "KBFRAME") {
+                    val frame = logTimed("decodeCanonicalInputArtifact") {
+                        decodeCanonicalInputArtifact(persistedImage.file)
+                    }
+                    val width = frame.width
+                    val height = frame.height
+                    runBenchmarks(
+                        context = context,
+                        originalFile = persistedImage.file,
+                        algorithms = algorithms,
+                        frames = listOf(frame),
+                        width = width,
+                        height = height,
+                        exposureTimes = listOf(0L),
+                        isoValues = listOf(100),
+                        captureTimeMs = 0L,
+                        originalDisplayRotation = 0,
+                        captureMetadata = CaptureMetadata(
+                            sourceFormat = "KBFRAME",
+                            width = width,
+                            height = height,
+                            exposureTimesMs = emptyList(),
+                            isoValues = emptyList(),
+                            captureTimeMs = 0L,
+                            preprocessing = PreprocessingRecord(
+                                config = PreprocessingConfig(),
+                                source = PreprocessingSource.CANONICAL_FRAME,
+                            ),
+                        ),
+                        parameterSnapshot = parameters,
+                        sourceFiles = listOf(persistedImage.file),
+                        denoiserConfig = DenoiserConfig(),
+                    )
+                    logTimed("recomputeMetricsWithReference") { recomputeMetricsWithReference() }
+                    _currentScreen.value = AppScreen.RESULTS
+                    closeCamera()
+                    return@launch
+                }
                 val isRaw = persistedImage.sourceFormat == "RAW_SENSOR"
                 // A DNG must go through this app's RAW pipeline: letting the platform decode it
                 // would substitute its own demosaic, white balance and tone curve, so the frame
@@ -2547,6 +2603,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun loadReferenceImage(context: Context, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                orphanPurgeJob?.join()
                 val persistedImage = persistPickedImage(context, uri, "REF") ?: return@launch
                 val bitmap = BitmapFactory.decodeFile(persistedImage.file.absolutePath, srgbDecodeOptions())
                     ?: run {
@@ -2584,25 +2641,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         prefix: String,
     ): PersistedPickedImage? {
         val mimeType = context.contentResolver.getType(uri)?.lowercase(Locale.US)
+        val displayName = queryDisplayName(context, uri)
         // Content providers often report a null or generic mime type for DNG, so also fall back
         // to the display name/path extension; without this a picked DNG fails the "RAW_SENSOR"
         // check below and gets mislabeled "Camera JPEG" in the results screen.
         val isDng = mimeType?.contains("dng") == true ||
-            queryDisplayName(context, uri)?.endsWith(".dng", ignoreCase = true) == true
+            displayName?.endsWith(".dng", ignoreCase = true) == true
+        val isKbframe = mimeType?.contains("kbframe") == true ||
+            displayName?.endsWith(".kbframe", ignoreCase = true) == true
         val extension = when {
+            isKbframe -> "kbframe"
             isDng -> "dng"
             mimeType == "image/png" -> "png"
             mimeType == "image/jpeg" || mimeType == "image/jpg" -> "jpg"
             else -> MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "img"
         }
         val sourceFormat = when {
+            isKbframe -> "KBFRAME"
             isDng -> "RAW_SENSOR"
             mimeType == "image/png" -> "PNG"
             mimeType == "image/jpeg" || mimeType == "image/jpg" -> "JPEG"
             else -> mimeType?.substringAfterLast('/')?.uppercase(Locale.US) ?: "UNKNOWN"
         }
         val timestamp = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())
-        val file = File(context.filesDir, "${prefix}_$timestamp.$extension")
+        val directory = if (isKbframe) context.cacheDir else context.filesDir
+        val filePrefix = if (isKbframe) "KBFRAME_IMPORT" else prefix
+        val file = File(directory, "${filePrefix}_$timestamp.$extension")
 
         return try {
             val input = context.contentResolver.openInputStream(uri) ?: return null

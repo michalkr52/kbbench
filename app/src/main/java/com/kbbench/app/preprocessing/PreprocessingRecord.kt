@@ -21,6 +21,7 @@ enum class PreprocessingSource {
     IMPORTED_DNG,
     RENDERED_IMAGE,
     PLATFORM_DNG,
+    CANONICAL_FRAME,
 }
 
 data class PreprocessingRecord(
@@ -59,7 +60,11 @@ data class PreprocessingRecord(
             .put("canonical_artifact_note", "KBFRAME artifacts are exact algorithm inputs and outputs; ARGB_8888 PNGs are display renditions")
             .put("profile", PreprocessingProfileJson.encode(config))
             .put("source", source.name.lowercase(Locale.ROOT))
-            .put("signal_origin", if (isRaw) "sensor_derived" else "rendered_derived")
+            .put("signal_origin", when {
+                source == PreprocessingSource.CANONICAL_FRAME -> "canonical_frame"
+                isRaw -> "sensor_derived"
+                else -> "rendered_derived"
+            })
             .put("primaries", if (isRaw && colorMatrix == null) "uncalibrated_camera_rgb" else "srgb")
             .put("raw_controls_available", isRaw)
             .put("effective_raw_frames", frames)

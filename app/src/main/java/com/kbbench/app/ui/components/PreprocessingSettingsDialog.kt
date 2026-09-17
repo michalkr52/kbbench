@@ -147,7 +147,7 @@ fun PreprocessingSettingsDialog(
                 )) { denoiser = denoiser.copy(choice = it) }
                 if (denoiser.isEnabled) {
                     Text("Fixed boundary: before final clipping", style = MaterialTheme.typography.bodySmall)
-                    ProfileNumber("Denoiser radius", denoiser.radius.toDouble(), 1f..32f, 30) {
+                    ProfileNumber("Denoiser radius", denoiser.radius.toDouble(), 1f..32f, 30, decimals = 0) {
                         denoiser = denoiser.copy(radius = it.toInt())
                     }
                     ProfileNumber("Denoiser epsilon", denoiser.eps, 0.001f..0.25f, 249) {
@@ -178,9 +178,16 @@ private fun <Value> ProfileChoice(label: String, selected: Value, options: List<
 }
 
 @Composable
-private fun ProfileNumber(label: String, value: Double, range: ClosedFloatingPointRange<Float>, steps: Int, onChange: (Double) -> Unit) {
+private fun ProfileNumber(
+    label: String,
+    value: Double,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    decimals: Int = 2,
+    onChange: (Double) -> Unit,
+) {
     Column {
-        Text("$label: ${"%.2f".format(Locale.US, value)}")
+        Text("$label: ${"%.${decimals}f".format(Locale.US, value)}")
         Slider(value = value.toFloat(), onValueChange = { onChange(it.toDouble()) }, valueRange = range, steps = steps)
     }
 }
