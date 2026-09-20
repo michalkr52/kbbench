@@ -207,7 +207,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
         when {
             showMetricsTable -> {
                 MetricsTableView(
-                    results = results.filterNot { it.isInputTile() },
+                    results = results.filterNot { it.id == "reference" },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -482,7 +482,7 @@ private fun MetricsTableView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 MetricsTableHeader(
-                    title = "Algorithm",
+                    title = "Variant",
                     column = MetricsSortColumn.ALGORITHM,
                     activeColumn = sortColumn,
                     ascending = sortAscending,

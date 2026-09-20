@@ -2696,6 +2696,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val record = lastAlgorithmOutputs.find { it.id == result.id }
                 if (record != null) {
                     result.copy(metrics = metricsFor(record.runtimeMs, record.imagePath))
+                } else if (result.id.startsWith("preprocessed_")) {
+                    result.copy(metrics = metricsFor(null, result.imagePath))
                 } else {
                     result
                 }
@@ -2744,7 +2746,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // Candidate pixels are reloaded from the persisted PNG rather than retained in memory.
-    private fun metricsFor(runtimeMs: Long, imagePath: String): BenchmarkMetrics = logTimed("metricsFor ($imagePath)") {
+    private fun metricsFor(runtimeMs: Long?, imagePath: String): BenchmarkMetrics = logTimed("metricsFor ($imagePath)") {
         val reference = _referenceImage.value ?: return@logTimed BenchmarkMetrics(runtimeMs = runtimeMs)
         val candidate = logTimed("  decode candidate") { BitmapFactory.decodeFile(imagePath, srgbDecodeOptions()) }
             ?: return@logTimed BenchmarkMetrics(runtimeMs = runtimeMs)
@@ -2927,9 +2929,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (result.imagePath != result.canonicalImagePath) {
                 imageByPath[result.imagePath]?.let { entry.put("display_image_id", it.id) }
             }
-            if (kind == "algorithm") {
-                entry.put("input_frame_indices", JSONArray(result.inputFrameIndices))
-                entry.put("input_image_ids", JSONArray(result.inputFrameIndices.map { "image_algorithm_input_$it" }))
+            if (kind == "algorithm" || kind == "algorithm_input") {
                 entry.put(
                     "metrics",
                     JSONObject()
@@ -2937,6 +2937,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         .put("psnr_db", metrics.psnr ?: JSONObject.NULL)
                         .put("ssim", metrics.ssim ?: JSONObject.NULL)
                 )
+            }
+            if (kind == "algorithm") {
+                entry.put("input_frame_indices", JSONArray(result.inputFrameIndices))
+                entry.put("input_image_ids", JSONArray(result.inputFrameIndices.map { "image_algorithm_input_$it" }))
                 // Effective values, not just overrides, so the run is reproducible from the export
                 // alone even if the built-in defaults change later.
                 val parameters = outputRecords.find { it.id == result.id }?.parameters
