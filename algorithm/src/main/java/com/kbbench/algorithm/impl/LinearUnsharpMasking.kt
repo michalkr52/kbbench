@@ -108,9 +108,9 @@ class LinearUnsharpMasking(
                     val correction = lambda * z
 
                     val i = row + x
-                    result.red[i] = corrected(src.r(i), correction)
-                    result.green[i] = corrected(src.g(i), correction)
-                    result.blue[i] = corrected(src.b(i), correction)
+                    result.setSample(0, i, corrected(src.r(i), correction))
+                    result.setSample(1, i, corrected(src.g(i), correction))
+                    result.setSample(2, i, corrected(src.b(i), correction))
                 }
 
                 val recycled = above
@@ -135,6 +135,6 @@ class LinearUnsharpMasking(
     }
 
     /** @return [level] with the luma-domain [correction] added, stored at the internal scale. */
-    private fun corrected(level: Float, correction: Double): Short =
-        Frame.store((level + correction).toFloat())
+    private fun corrected(level: Float, correction: Double): Float =
+        (level + correction).toFloat()
 }

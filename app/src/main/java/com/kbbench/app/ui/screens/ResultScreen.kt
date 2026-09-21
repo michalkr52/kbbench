@@ -74,6 +74,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     var showHistograms by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var exportAsZip by remember { mutableStateOf(false) }
+    var includePngImages by remember { mutableStateOf(true) }
     var showMetricsTable by remember { mutableStateOf(false) }
     var showAlgorithmSelector by remember { mutableStateOf(false) }
     var showPreprocessing by remember { mutableStateOf(false) }
@@ -81,6 +82,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
     val enabledAlgorithmNames by viewModel.enabledAlgorithmNames.collectAsState()
     val algorithmParameters by viewModel.algorithmParameters.collectAsState()
     val preprocessingConfig by viewModel.preprocessingConfig.collectAsState()
+    val denoiserConfig by viewModel.denoiserConfig.collectAsState()
     val canRerun by viewModel.canRerun.collectAsState()
     val canReprocessFromSource by viewModel.canReprocessFromSource.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
@@ -192,6 +194,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
                         }
                         IconButton(onClick = {
                             exportAsZip = false
+                            includePngImages = true
                             showExportDialog = true
                         }) {
                             Icon(Icons.Default.Share, contentDescription = "Export")
@@ -204,7 +207,7 @@ fun ResultScreen(viewModel: CameraViewModel) {
         when {
             showMetricsTable -> {
                 MetricsTableView(
-                    results = results.filterNot { it.isInputTile() },
+                    results = results.filterNot { it.id == "reference" },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -310,23 +313,53 @@ fun ResultScreen(viewModel: CameraViewModel) {
     if (showExportDialog) {
         AlertDialog(
             onDismissRequest = { showExportDialog = false },
-            title = { Text("Export benchmark results") },
+            title = { Text("Export results") },
             text = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = exportAsZip,
-                        onCheckedChange = { exportAsZip = it }
+                Column {
+                    Text(
+                        text = "Image formats",
+                        style = MaterialTheme.typography.titleSmall,
                     )
-                    Text("Pack results into ZIP")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = true,
+                            onCheckedChange = null,
+                            enabled = false,
+                            modifier = Modifier.size(48.dp),
+                        )
+                        Text("Exact frame files (.kbframe)")
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = includePngImages,
+                            onCheckedChange = { includePngImages = it },
+                            modifier = Modifier.size(48.dp),
+                        )
+                        Text("8-bit PNG files (.png)")
+                    }
+                    HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = exportAsZip,
+                            onCheckedChange = { exportAsZip = it }
+                        )
+                        Text("Pack results into ZIP")
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     showExportDialog = false
-                    viewModel.exportResults(context, exportAsZip)
+                    viewModel.exportResults(context, exportAsZip, includePngImages)
                 }) {
                     Text("Export")
                 }
@@ -367,12 +400,19 @@ fun ResultScreen(viewModel: CameraViewModel) {
     if (showPreprocessing) {
         PreprocessingSettingsDialog(
             initial = preprocessingConfig,
-            onConfirm = { config ->
+            initialDenoiser = denoiserConfig,
+            onConfirm = { config, denoiser ->
+                val preprocessingChanged = config != preprocessingConfig
+                val denoiserChanged = denoiser != denoiserConfig
                 viewModel.setPreprocessingConfig(config)
+                viewModel.setDenoiserConfig(denoiser)
                 showPreprocessing = false
                 selectedIndex = null
                 compareIndices = null
-                viewModel.reprocessFromSource(context)
+                when {
+                    preprocessingChanged -> viewModel.reprocessFromSource(context)
+                    denoiserChanged -> viewModel.rerunDenoiser(context)
+                }
             },
             onDismiss = { showPreprocessing = false },
         )
@@ -442,7 +482,7 @@ private fun MetricsTableView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 MetricsTableHeader(
-                    title = "Algorithm",
+                    title = "Variant",
                     column = MetricsSortColumn.ALGORITHM,
                     activeColumn = sortColumn,
                     ascending = sortAscending,
@@ -879,8 +919,9 @@ fun ResultFullscreenView(
         val currentResult = results[pagerState.currentPage]
         val displayMetrics = currentResult.metrics.toDisplayList()
         val inputFrameDescription = currentResult.inputFrameDescription()
+        val detailSubtitle = currentResult.fullscreenSubtitle ?: currentResult.subtitle
         val hasDetails = displayMetrics.isNotEmpty() ||
-            currentResult.subtitle != null ||
+            detailSubtitle != null ||
             inputFrameDescription != null
 
         if (hasDetails) {
@@ -893,7 +934,7 @@ fun ResultFullscreenView(
                         if (displayMetrics.isNotEmpty()) "Metrics" else "Preprocessing",
                         style = MaterialTheme.typography.titleMedium
                     )
-                    currentResult.subtitle?.let { subtitle ->
+                    detailSubtitle?.let { subtitle ->
                         Text(
                             text = subtitle,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),

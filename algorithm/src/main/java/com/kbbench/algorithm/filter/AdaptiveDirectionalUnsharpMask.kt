@@ -166,9 +166,9 @@ object AdaptiveDirectionalUnsharpMask {
 
                     // Eq. (5), written with A(n,m); Eq. (16) below then produces A(n,m+1).
                     val correction = gainX * zx[p] + gainY * zy[p]
-                    out.red[i] = corrected(src.r(i), correction)
-                    out.green[i] = corrected(src.g(i), correction)
-                    out.blue[i] = corrected(src.b(i), correction)
+                    out.setSample(0, i, corrected(src.r(i), correction))
+                    out.setSample(1, i, corrected(src.g(i), correction))
+                    out.setSample(2, i, corrected(src.b(i), correction))
 
                     rXX = retain * rXX + beta * hx * hx
                     rXY = retain * rXY + beta * hx * hy
@@ -228,8 +228,8 @@ object AdaptiveDirectionalUnsharpMask {
     }
 
     /** @return [level] with the luma-domain [correction] added, stored at the internal scale. */
-    private fun corrected(level: Float, correction: Double): Short =
-        Frame.store((level + correction).toFloat())
+    private fun corrected(level: Float, correction: Double): Float =
+        (level + correction).toFloat()
 
     private fun validate(
         tau1: Double,

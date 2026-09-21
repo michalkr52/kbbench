@@ -37,17 +37,31 @@ object ArgbPng {
         try {
             write(canonical, bitmap)
             if (display == canonical) return
-            val row = IntArray(bitmap.width)
-            for (rowIndex in 0 until bitmap.height) {
-                bitmap.getPixels(row, 0, bitmap.width, 0, rowIndex, bitmap.width, 1)
-                for (column in row.indices) row[column] = transfer.apply(row[column])
-                bitmap.setPixels(row, 0, bitmap.width, 0, rowIndex, bitmap.width, 1)
-            }
+            applyTransfer(bitmap, transfer)
             write(display, bitmap)
         } catch (failure: Exception) {
             canonical.delete()
             if (display != canonical) display.delete()
             throw failure
+        }
+    }
+
+    fun saveDisplay(display: File, bitmap: Bitmap, transfer: ArgbTransfer) {
+        try {
+            applyTransfer(bitmap, transfer)
+            write(display, bitmap)
+        } catch (failure: Exception) {
+            display.delete()
+            throw failure
+        }
+    }
+
+    private fun applyTransfer(bitmap: Bitmap, transfer: ArgbTransfer) {
+        val row = IntArray(bitmap.width)
+        for (rowIndex in 0 until bitmap.height) {
+            bitmap.getPixels(row, 0, bitmap.width, 0, rowIndex, bitmap.width, 1)
+            for (column in row.indices) row[column] = transfer.apply(row[column])
+            bitmap.setPixels(row, 0, bitmap.width, 0, rowIndex, bitmap.width, 1)
         }
     }
 

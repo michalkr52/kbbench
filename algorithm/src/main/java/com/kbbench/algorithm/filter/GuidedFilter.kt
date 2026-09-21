@@ -1,6 +1,7 @@
 package com.kbbench.algorithm.filter
 
 import com.kbbench.algorithm.base.Frame
+import com.kbbench.algorithm.base.FrameStorage
 import kotlin.math.max
 import kotlin.math.min
 
@@ -53,12 +54,13 @@ object GuidedFilter {
         radius: Int,
         eps: Double,
         bandHeight: Int = 0,
+        outputStorage: FrameStorage = src.storage,
     ): Frame {
         validate(radius, eps)
 
         val width = src.width
         val height = src.height
-        val out = src.emptyLike()
+        val out = emptyOutput(src, outputStorage)
         val band = resolveBandHeight(bandHeight, width, height, radius, PLANES_GRAY)
         val capacity = width * bandCapacityRows(band, height, radius)
 
@@ -73,10 +75,8 @@ object GuidedFilter {
             val base = s0 * width
 
             for (channel in 0 until 3) {
-                val srcPlane = src.plane(channel)
-                val outPlane = out.plane(channel)
                 for (i in 0 until count) {
-                    guidance[i] = Frame.level(srcPlane, base + i)
+                    guidance[i] = src.sample(channel, base + i)
                 }
 
                 for (i in 0 until count) {
@@ -104,7 +104,7 @@ object GuidedFilter {
                     for (x in 0 until width) {
                         val i = srcRow + x
                         val p = planeRow + x
-                        outPlane[i] = Frame.store(bufB[p] * Frame.level(srcPlane, i) + bufA[p])
+                        out.setSample(channel, i, bufB[p] * src.sample(channel, i) + bufA[p])
                     }
                 }
             }
@@ -132,12 +132,13 @@ object GuidedFilter {
         radius: Int,
         eps: Double,
         bandHeight: Int = 0,
+        outputStorage: FrameStorage = src.storage,
     ): Frame {
         validate(radius, eps)
 
         val width = src.width
         val height = src.height
-        val out = src.emptyLike()
+        val out = emptyOutput(src, outputStorage)
         val band = resolveBandHeight(bandHeight, width, height, radius, PLANES_COLOR)
         val capacity = width * bandCapacityRows(band, height, radius)
 
@@ -153,18 +154,16 @@ object GuidedFilter {
             val base = s0 * width
 
             for (c in 0 until 3) {
-                val srcPlane = src.plane(c)
                 for (i in 0 until count) {
-                    plane[i] = Frame.level(srcPlane, base + i)
+                    plane[i] = src.sample(c, base + i)
                 }
                 BoxFilter.mean(plane, meanI[c], scratch, width, rows, radius)
             }
 
             for (k in COVARIANCE_PAIRS.indices) {
-                val planeJ = src.plane(COVARIANCE_PAIRS[k][0])
-                val planeL = src.plane(COVARIANCE_PAIRS[k][1])
                 for (i in 0 until count) {
-                    plane[i] = Frame.level(planeJ, base + i) * Frame.level(planeL, base + i)
+                    plane[i] = src.sample(COVARIANCE_PAIRS[k][0], base + i) *
+                        src.sample(COVARIANCE_PAIRS[k][1], base + i)
                 }
                 BoxFilter.mean(plane, covariance[k], scratch, width, rows, radius)
 
@@ -199,9 +198,9 @@ object GuidedFilter {
                     val g = src.g(i)
                     val b = src.b(i)
 
-                    out.red[i] = Frame.store(aRR[p] * r + aRG[p] * g + aRB[p] * b + bR[p])
-                    out.green[i] = Frame.store(aRG[p] * r + aGG[p] * g + aGB[p] * b + bG[p])
-                    out.blue[i] = Frame.store(aRB[p] * r + aGB[p] * g + aBB[p] * b + bB[p])
+                    out.setSample(0, i, aRR[p] * r + aRG[p] * g + aRB[p] * b + bR[p])
+                    out.setSample(1, i, aRG[p] * r + aGG[p] * g + aGB[p] * b + bG[p])
+                    out.setSample(2, i, aRB[p] * r + aGB[p] * g + aBB[p] * b + bB[p])
                 }
             }
         }
@@ -268,6 +267,27 @@ object GuidedFilter {
     private fun validate(radius: Int, eps: Double) {
         require(radius >= 1) { "radius must be >= 1, got $radius" }
         require(eps > 0.0) { "eps must be > 0, got $eps" }
+    }
+
+    private fun emptyOutput(src: Frame, storage: FrameStorage): Frame = when (storage) {
+        FrameStorage.BOUNDED_U16 -> Frame(
+            red = ShortArray(src.size),
+            green = ShortArray(src.size),
+            blue = ShortArray(src.size),
+            width = src.width,
+            height = src.height,
+            sourceDepth = src.sourceDepth,
+            domain = src.domain,
+        )
+        FrameStorage.UNCLIPPED_FLOAT -> Frame.unclipped(
+            red = FloatArray(src.size),
+            green = FloatArray(src.size),
+            blue = FloatArray(src.size),
+            width = src.width,
+            height = src.height,
+            sourceDepth = src.sourceDepth,
+            domain = src.domain,
+        )
     }
 
     /** @return rows a band buffer must hold: the band plus a `2 * radius` halo on each side. */

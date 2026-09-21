@@ -17,6 +17,17 @@ import org.junit.Test
 
 class PreprocessingProfileJsonTest {
     @Test
+    fun denoiserSettingsRoundTripWithoutVersioning() {
+        val config = DenoiserConfig(
+            choice = DenoiserChoice.GUIDED_FILTER_COLOR,
+            radius = 13,
+            eps = 0.075,
+        )
+
+        assertEquals(config, DenoiserConfigJson.decode(DenoiserConfigJson.encode(config)))
+    }
+
+    @Test
     fun everyCurveRoundTripsWithExplicitDefaultsAndManualValues() {
         for (encoding in TransferEncoding.entries) {
             val profile = PreprocessingConfig(
@@ -41,9 +52,12 @@ class PreprocessingProfileJsonTest {
         val profile = PreprocessingConfig(transferCurve = TransferCurve(TransferEncoding.LINEAR))
         val rendered = PreprocessingRecord(profile, PreprocessingSource.PLATFORM_DNG).toJson()
         assertFalse(rendered.getBoolean("raw_controls_available"))
-        assertEquals("PLATFORM_DNG", rendered.getString("source"))
+        assertEquals("platform_dng", rendered.getString("source"))
         assertEquals("rendered_derived", rendered.getString("signal_origin"))
         assertEquals("srgb", rendered.getJSONObject("display").getString("transfer"))
+        assertEquals("planar_uint16", rendered.getString("pixel_format"))
+        assertEquals(FrameArtifact.FORMAT, rendered.getString("algorithm_frame_artifact_format"))
+        assertEquals(FrameArtifact.VERSION, rendered.getInt("algorithm_frame_artifact_version"))
         assertTrue(rendered.getJSONObject("profile").isNull("manual_white_balance"))
         val raw = PreprocessingRecord(profile, PreprocessingSource.CAMERA_RAW).toJson()
         assertTrue(raw.getBoolean("raw_controls_available"))

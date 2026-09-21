@@ -85,14 +85,20 @@ fun CameraScreen(viewModel: CameraViewModel) {
     val algorithmParameters by viewModel.algorithmParameters.collectAsState()
     val showRuleOfThirds by viewModel.showRuleOfThirds.collectAsState()
     val preprocessingConfig by viewModel.preprocessingConfig.collectAsState()
+    val denoiserConfig by viewModel.denoiserConfig.collectAsState()
     var showPreprocessing by remember { mutableStateOf(false) }
     var lastSurface by remember { mutableStateOf<android.view.Surface?>(null) }
     var focusTapPosition by remember { mutableStateOf<Offset?>(null) }
     var showFocusIndicator by remember { mutableStateOf(false) }
     var showAlgorithmSelector by remember { mutableStateOf(false) }
+    var showInputSourceDialog by remember { mutableStateOf(false) }
 
-    val uploadInputLauncher = rememberLauncherForActivityResult(
+    val uploadImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri -> uri?.let { viewModel.loadInputFromGallery(context, it) } }
+    )
+    val uploadKbframeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri -> uri?.let { viewModel.loadInputFromGallery(context, it) } }
     )
 
@@ -197,7 +203,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             shape = MaterialTheme.shapes.small,
                         ) {
                             HelpButton(
-                                title = "Benchmark algorithms",
+                                title = "Usage instructions",
                                 sections = listOf(
                                     "" to "This application allows you to benchmark computational photography algorithms on your device. Begin by configuring processing settings, then capture or load images to run the benchmarks.",
                                     "Preprocessing settings" to "Configure how images are processed before running the algorithms. This includes steps like demosaicing, white balance, and other image adjustments.",
@@ -305,11 +311,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
-                                onClick = {
-                                    uploadInputLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
+                                onClick = { showInputSourceDialog = true },
                                 enabled = !isProcessing,
                                 modifier = Modifier
                                     .padding(end = 24.dp)
@@ -318,7 +320,7 @@ fun CameraScreen(viewModel: CameraViewModel) {
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.PhotoLibrary,
-                                    contentDescription = "Load input image",
+                                    contentDescription = "Load input",
                                     tint = Color.White
                                 )
                             }
@@ -411,7 +413,12 @@ fun CameraScreen(viewModel: CameraViewModel) {
     if (showPreprocessing) {
         PreprocessingSettingsDialog(
             initial = preprocessingConfig,
-            onConfirm = { viewModel.setPreprocessingConfig(it); showPreprocessing = false },
+            initialDenoiser = denoiserConfig,
+            onConfirm = { config, denoiser ->
+                viewModel.setPreprocessingConfig(config)
+                viewModel.setDenoiserConfig(denoiser)
+                showPreprocessing = false
+            },
             onDismiss = { showPreprocessing = false },
         )
     }
@@ -429,6 +436,40 @@ fun CameraScreen(viewModel: CameraViewModel) {
             confirmLabel = "Done",
             onConfirm = { showAlgorithmSelector = false },
             onDismiss = { showAlgorithmSelector = false }
+        )
+    }
+
+    if (showInputSourceDialog) {
+        AlertDialog(
+            onDismissRequest = { showInputSourceDialog = false },
+            title = { Text("Choose input format") },
+            confirmButton = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            showInputSourceDialog = false
+                            uploadImageLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Photo")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            showInputSourceDialog = false
+                            uploadKbframeLauncher.launch(arrayOf("*/*"))
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("KBFRAME")
+                    }
+                }
+            },
         )
     }
 }

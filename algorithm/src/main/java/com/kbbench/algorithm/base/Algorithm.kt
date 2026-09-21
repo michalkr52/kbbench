@@ -3,8 +3,9 @@ package com.kbbench.algorithm.base
 /**
  * Common contract for every image processing algorithm benchmarked by kbbench.
  *
- * Implementations must be pure Kotlin/JVM and operate on ARGB_8888 pixels packed
- * into [Int] values. They are expected to be stateless and thread-confined per call.
+ * Implementations must be pure Kotlin/JVM and operate on planar [Frame] values. They are expected
+ * to be stateless and thread-confined per call. ARGB_8888 conversion is an explicit display/export
+ * operation performed by [Frame.toArgb], not part of the algorithm contract.
  */
 interface ImageAlgorithm {
     /** Structured description used by UI, filtering and validation logic. */

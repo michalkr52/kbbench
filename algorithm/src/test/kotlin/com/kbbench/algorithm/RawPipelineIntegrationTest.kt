@@ -1,6 +1,6 @@
 package com.kbbench.algorithm
 
-import com.kbbench.algorithm.base.Frame
+import com.kbbench.algorithm.base.AlgorithmInput
 import com.kbbench.algorithm.impl.GuidedFilterDenoise
 import com.kbbench.algorithm.preprocessing.CfaPattern
 import com.kbbench.algorithm.preprocessing.RawPreprocessor
@@ -14,11 +14,8 @@ import kotlin.test.assertTrue
  * Walks a synthetic 12-bit sensor frame through the same sequence the app does -- preprocess,
  * wrap as a [Frame], run an algorithm -- without needing a device.
  *
- * This is also where the remaining gap is pinned. The module now stores and computes at 16 bits,
- * but [RawPreprocessor] still hands back packed ARGB, so a 12-bit sensor is flattened to 256
- * levels before any algorithm sees it. The assertions below record that as the current behaviour
- * on purpose: when the RAW pipeline learns to emit a [Frame] directly, this test is what fails and
- * says so.
+ * The preprocessor emits the same planar [com.kbbench.algorithm.base.Frame] consumed by algorithms,
+ * so a wider sensor source is not quantized to ARGB before execution.
  */
 class RawPipelineIntegrationTest {
 
@@ -37,23 +34,24 @@ class RawPipelineIntegrationTest {
 
         assertEquals(SIZE, processed.width)
         assertEquals(SIZE, processed.height)
-        assertEquals(SIZE * SIZE, processed.pixels.size)
+        assertEquals(SIZE * SIZE, processed.frame.size)
 
-        // Exactly what CameraViewModel.runBenchmarks does with a preprocessed frame today.
-        val frame = Frame.fromArgb(processed.pixels, processed.width, processed.height, sourceDepth = 8)
-        val output = GuidedFilterDenoise().process(inputOf(SIZE, SIZE, frame.toArgb()))
+        val output = GuidedFilterDenoise().process(
+            AlgorithmInput(
+                frames = listOf(processed.frame),
+                exposureTimes = listOf(0L),
+                isoValues = listOf(100),
+                captureTimeMs = 0L,
+            ),
+        )
 
         assertEquals(SIZE, output.width)
         assertEquals(SIZE, output.height)
         assertTrue(output.totalTime >= 0)
     }
 
-    /**
-     * The gap, stated as a number. The sensor buffer carries 4096 distinct values; what survives
-     * the preprocessor cannot exceed the 256 a packed byte holds.
-     */
     @Test
-    fun preprocessorStillFlattensTwelveBitSensorDataToEightBits() {
+    fun twelveBitSensorPrecisionSurvivesIntoTheAlgorithmFrame() {
         val sensorLevels = (0 until SIZE * SIZE).map { it * SENSOR_MAX / (SIZE * SIZE - 1) }.distinct().size
         assertTrue(sensorLevels > 1000, "the fixture should be a genuine 12-bit ramp, got $sensorLevels levels")
 
@@ -68,15 +66,18 @@ class RawPipelineIntegrationTest {
             pattern = CfaPattern.RGGB,
         )
 
-        val surviving = processed.pixels.map { (it shr 8) and 0xFF }.distinct().size
+        val surviving = processed.frame.red
+            .map { it.toInt() and 0xFFFF }
+            .distinct()
+            .size
         assertTrue(
-            surviving <= 256,
-            "packed ARGB cannot hold more than 256 levels per channel, got $surviving",
+            surviving > 256,
+            "the planar Frame should retain more than 8-bit precision, got $surviving levels",
         )
         assertTrue(
-            sensorLevels > surviving * 4,
-            "the fixture must be much richer than the pipeline output for this to mean anything: " +
-                "$sensorLevels sensor levels versus $surviving surviving",
+            sensorLevels <= surviving * 4,
+            "the fixture should not lose most of its levels: $sensorLevels sensor levels versus " +
+                "$surviving surviving",
         )
     }
 

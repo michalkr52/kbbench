@@ -59,6 +59,14 @@ android {
         dataBinding false
         compose true
     }
+
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
+            jvmArgs '--add-exports=java.base/jdk.internal.access=ALL-UNNAMED'
+        }
+    }
 }
 
 
@@ -108,7 +116,7 @@ dependencies {
     testImplementation 'androidx.test:rules:1.6.1'
     testImplementation 'androidx.test:runner:1.6.1'
     testImplementation 'androidx.test.espresso:espresso-core:3.6.1'
-    testImplementation 'org.robolectric:robolectric:4.3.1'
+    testImplementation 'org.robolectric:robolectric:4.17'
 
     // Instrumented testing
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'

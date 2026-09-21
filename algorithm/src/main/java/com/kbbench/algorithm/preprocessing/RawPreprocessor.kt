@@ -1,5 +1,6 @@
 package com.kbbench.algorithm.preprocessing
 
+import com.kbbench.algorithm.base.Frame
 import java.nio.ByteBuffer
 
 enum class WhiteBalanceSource {
@@ -27,11 +28,14 @@ data class ResolvedRawPreprocessing(
 )
 
 data class RawPreprocessingResult(
-    val pixels: IntArray,
+    val frame: Frame,
     val width: Int,
     val height: Int,
     val settings: ResolvedRawPreprocessing,
-)
+) {
+    /** Compatibility view for callers that explicitly need an ARGB_8888 rendition. */
+    val pixels: IntArray get() = frame.toArgb()
+}
 
 object RawPreprocessor {
     const val VERSION = 1
@@ -50,6 +54,7 @@ object RawPreprocessor {
         shadingMap: ShadingMap? = null,
         gainMaps: List<GainMap> = emptyList(),
         config: PreprocessingConfig = PreprocessingConfig(),
+        unclippedBoundary: Boolean = false,
     ): RawPreprocessingResult {
         require(width > 0 && height > 0 && width.toLong() * height <= Int.MAX_VALUE) {
             "Invalid RAW dimensions"
@@ -99,16 +104,18 @@ object RawPreprocessor {
             WhiteBalanceMode.IDENTITY -> WhiteBalanceSource.IDENTITY
             WhiteBalanceMode.MANUAL -> WhiteBalanceSource.MANUAL
         }
-        val pixels = BayerDemosaic.demosaic(
+        val frame = BayerDemosaic.demosaicFrame(
             raw, width, height, pattern,
             rGain = effectiveGains.red,
             gGain = effectiveGains.green,
             bGain = effectiveGains.blue,
             colorMatrix = colorMatrix,
             config = config,
+            sourceDepth = 32 - Integer.numberOfLeadingZeros(whiteLevel),
+            unclippedBoundary = unclippedBoundary,
         )
         return RawPreprocessingResult(
-            pixels, width, height,
+            frame, width, height,
             ResolvedRawPreprocessing(
                 config, effectiveGains, source, effectiveShading, gainMaps.size, appliedGainMapCount,
             ),

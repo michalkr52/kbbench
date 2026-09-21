@@ -8,7 +8,6 @@ import com.kbbench.algorithm.base.AlgorithmPreprocessingGuidance
 import com.kbbench.algorithm.base.FrameRequirements
 import com.kbbench.algorithm.base.ImageAlgorithm
 import com.kbbench.algorithm.base.InputFrameType
-import com.kbbench.algorithm.base.Frame
 import com.kbbench.algorithm.base.measureMs
 
 /**
@@ -37,21 +36,18 @@ class ContrastStretching : ImageAlgorithm {
 
         val (_, processMs) = measureMs {
             for (channel in 0 until 3) {
-                val srcPlane = src.plane(channel)
-                val outPlane = out.plane(channel)
-
                 var min = 1f
                 var max = 0f
                 for (i in 0 until src.size) {
-                    val v = Frame.level(srcPlane, i)
+                    val v = src.sample(channel, i)
                     if (v < min) min = v
                     if (v > max) max = v
                 }
 
                 val range = max - min
                 for (i in 0 until src.size) {
-                    val v = Frame.level(srcPlane, i)
-                    outPlane[i] = if (range == 0f) srcPlane[i] else Frame.store((v - min) / range)
+                    val v = src.sample(channel, i)
+                    out.setSample(channel, i, if (range == 0f) v else (v - min) / range)
                 }
             }
         }

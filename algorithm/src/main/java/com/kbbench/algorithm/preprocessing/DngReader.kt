@@ -192,25 +192,25 @@ object DngReader {
             }.slice().order(ByteOrder.LITTLE_ENDIAN)
         }
 
-        val plane = ByteArray(expected.toInt())
+        val plane = ByteBuffer.allocateDirect(expected.toInt()).order(ByteOrder.LITTLE_ENDIAN)
         var written = 0
         for (i in offsets.indices) {
             val start = offsets[i].toInt()
-            val count = minOf(byteCounts[i].toInt(), plane.size - written)
+            val count = minOf(byteCounts[i].toInt(), plane.capacity() - written)
             if (count <= 0) break
-            for (b in 0 until count) plane[written + b] = buffer.get(start + b)
+            for (b in 0 until count) plane.put(written + b, buffer.get(start + b))
             written += count
         }
         if (byteOrder == ByteOrder.BIG_ENDIAN) {
             var i = 0
-            while (i + 1 < plane.size) {
-                val swap = plane[i]
-                plane[i] = plane[i + 1]
-                plane[i + 1] = swap
+            while (i + 1 < plane.capacity()) {
+                val swap = plane.get(i)
+                plane.put(i, plane.get(i + 1))
+                plane.put(i + 1, swap)
                 i += 2
             }
         }
-        return ByteBuffer.wrap(plane).order(ByteOrder.LITTLE_ENDIAN)
+        return plane
     }
 
     /** DNG stores `AsShotNeutral` as the reciprocal of the white balance gains. */

@@ -1,6 +1,7 @@
 package com.kbbench.algorithm
 
 import com.kbbench.algorithm.base.Frame
+import com.kbbench.algorithm.base.FrameDomain
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -124,5 +125,47 @@ class FrameTest {
 
         assertFailsWith<IllegalArgumentException> { frame.plane(3) }
         assertFailsWith<IllegalArgumentException> { frame.plane(-1) }
+    }
+
+    @Test
+    fun unclippedFramesPreserveDomainAndOutOfRangeSamples() {
+        val frame = Frame.unclipped(
+            red = floatArrayOf(-0.25f, 0.5f, 1.25f),
+            green = floatArrayOf(0f, 0.5f, 1f),
+            blue = floatArrayOf(0f, 0.5f, 1f),
+            width = 3,
+            height = 1,
+            sourceDepth = 12,
+            domain = FrameDomain.LINEAR,
+        )
+
+        assertEquals(FrameDomain.LINEAR, frame.domain)
+        assertTrue(frame.isUnclipped)
+        assertEquals(-0.25f, frame.r(0))
+        assertEquals(1.25f, frame.r(2))
+        assertEquals(0x000000, frame.toArgb()[0] and 0xFFFFFF)
+        assertEquals(0xFFFFFF, frame.toArgb()[2] and 0xFFFFFF)
+    }
+
+    @Test
+    fun emptyLikePreservesUnclippedStorageAndDomain() {
+        val frame = Frame.unclipped(
+            red = FloatArray(2),
+            green = FloatArray(2),
+            blue = FloatArray(2),
+            width = 2,
+            height = 1,
+            sourceDepth = 16,
+            domain = FrameDomain.LOG,
+        )
+
+        val output = frame.emptyLike()
+        output.setSample(0, 0, -2f)
+        output.setSample(1, 1, 3f)
+
+        assertTrue(output.isUnclipped)
+        assertEquals(FrameDomain.LOG, output.domain)
+        assertEquals(-2f, output.r(0))
+        assertEquals(3f, output.g(1))
     }
 }
